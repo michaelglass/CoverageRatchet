@@ -205,18 +205,9 @@ type CiResult =
     | CiOtherFailure
     | CiCoverageFailure of artifactDir: string
 
-let internal resolveGitDir (repoRoot: string) : string option =
-    let dotGit = Path.Combine(repoRoot, ".git")
-
-    if Directory.Exists(dotGit) || File.Exists(dotGit) then
-        None
-    else
-        let jjGitDir = Path.Combine(repoRoot, ".jj", "repo", "store", "git")
-
-        if Directory.Exists(jjGitDir) then
-            Some(Path.GetFullPath(jjGitDir))
-        else
-            None
+// Shared with FsSemanticTagger via the linked Shared/GitDir.fs compile item;
+// walks up from any nested subdir to the repo root.
+let internal resolveGitDir (startDir: string) : string option = Shared.GitDir.resolveGitDir startDir
 
 let private withJjGitDir (f: unit -> 'a) : 'a =
     let gitDir = resolveGitDir (Directory.GetCurrentDirectory())

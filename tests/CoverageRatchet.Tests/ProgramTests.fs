@@ -33,6 +33,24 @@ let ``resolveGitDir - returns absolute path for jj repo`` () =
         test <@ result = Some jjGitDir @>)
 
 [<Fact>]
+let ``resolveGitDir - secondary workspace (.jj/repo is a pointer file) targets the real jj git store`` () =
+    withTempDir (fun tmpDir ->
+        // Real repo: <tmp>/realrepo/.jj/repo/store/git is a directory.
+        let realRepoStore = Path.Combine(tmpDir, "realrepo", ".jj", "repo", "store", "git")
+
+        Directory.CreateDirectory(realRepoStore) |> ignore
+
+        // Secondary workspace: <tmp>/ws/.jj/repo is a FILE containing the relative path
+        // (resolved relative to <tmp>/ws/.jj/) to <tmp>/realrepo/.jj/repo.
+        let wsJj = Path.Combine(tmpDir, "ws", ".jj")
+        Directory.CreateDirectory(wsJj) |> ignore
+        File.WriteAllText(Path.Combine(wsJj, "repo"), "../../realrepo/.jj/repo\n")
+
+        let result = resolveGitDir (Path.Combine(tmpDir, "ws"))
+
+        test <@ result = Some(Path.GetFullPath realRepoStore) @>)
+
+[<Fact>]
 let ``resolveGitDir - prefers git over jj when both exist`` () =
     withTempDir (fun tmpDir ->
         Directory.CreateDirectory(Path.Combine(tmpDir, ".git")) |> ignore
@@ -48,6 +66,33 @@ let ``resolveGitDir - prefers git over jj when both exist`` () =
 let ``resolveGitDir - returns None when neither git nor jj exists`` () =
     withTempDir (fun tmpDir ->
         let result = resolveGitDir tmpDir
+
+        test <@ result = None @>)
+
+[<Fact>]
+let ``resolveGitDir - walks up from a nested subdir to the jj git store`` () =
+    withTempDir (fun tmpDir ->
+        // Repo root has the jj store; we resolve from a deeply nested subdir.
+        let jjGitDir = Path.Combine(tmpDir, ".jj", "repo", "store", "git")
+        Directory.CreateDirectory(jjGitDir) |> ignore
+
+        let nested = Path.Combine(tmpDir, "coverage", "CoverageRatchet")
+        Directory.CreateDirectory(nested) |> ignore
+
+        let result = resolveGitDir nested
+
+        test <@ result = Some jjGitDir @>)
+
+[<Fact>]
+let ``resolveGitDir - walks up from a nested subdir and stops at a native git root`` () =
+    withTempDir (fun tmpDir ->
+        // Native git repo root; resolution from a subdir must stop there and return None.
+        Directory.CreateDirectory(Path.Combine(tmpDir, ".git")) |> ignore
+
+        let nested = Path.Combine(tmpDir, "src", "Tool")
+        Directory.CreateDirectory(nested) |> ignore
+
+        let result = resolveGitDir nested
 
         test <@ result = None @>)
 
