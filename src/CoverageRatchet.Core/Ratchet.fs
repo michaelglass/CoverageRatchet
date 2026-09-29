@@ -266,49 +266,44 @@ let ratchetRawWithStatus (raw: RawConfig) (files: FileCoverage list) : RatchetSt
     else
         NoChanges
 
+/// Lower the floors of the files in `files` that fail them, to their current
+/// coverage, and leave every other entry exactly as it is.
+///
+/// Only a failing number moves, and only down: a file failing its line floor keeps
+/// its branch floor. A failing file without an override gets one, with
+/// `reason = "loosened automatically"`. A passing file is never touched, so a floor
+/// set on purpose (a Linux value, a file at 100% that keeps a floor) survives;
+/// tightening is `ratchet`'s job.
 let loosen (config: Config) (files: FileCoverage list) : Config =
-    let fileMap = files |> List.map (fun f -> f.FileName, f) |> Map.ofList
+    let lowered =
+        buildFileResults config files
+        |> List.filter (fun r -> not (FileResult.passed r))
+        |> List.map (fun r ->
+            let line = min r.LineThreshold (toThreshold r.File.LinePct)
+            let branch = min r.BranchThreshold (toThreshold r.File.BranchPct)
 
-    let updatedOverrides =
-        config.Overrides
-        |> Map.toList
-        |> List.choose (fun (name, ovr) ->
-            match Map.tryFind name fileMap with
-            | None -> Some(name, ovr)
-            | Some file ->
-                if file.LinePct >= config.DefaultLine && file.BranchPct >= config.DefaultBranch then
-                    None
-                else
-                    Some(
-                        name,
-                        { ovr with
-                            Line = toThreshold file.LinePct
-                            Branch = toThreshold file.BranchPct
-                        }
-                    ))
-        |> Map.ofList
+            let updated =
+                match Map.tryFind r.File.FileName config.Overrides with
+                | Some existing ->
+                    { existing with
+                        Line = line
+                        Branch = branch
+                    }
+                | None ->
+                    {
+                        Line = line
+                        Branch = branch
+                        Reason = Some "loosened automatically"
+                        Platform = None
+                    }
 
-    let newOverrides =
-        files
-        |> List.fold
-            (fun acc file ->
-                if Map.containsKey file.FileName acc then
-                    acc
-                elif file.LinePct >= config.DefaultLine && file.BranchPct >= config.DefaultBranch then
-                    acc
-                else
-                    Map.add
-                        file.FileName
-                        {
-                            Line = toThreshold file.LinePct
-                            Branch = toThreshold file.BranchPct
-                            Reason = Some "loosened automatically"
-                            Platform = None
-                        }
-                        acc)
-            updatedOverrides
+            r.File.FileName, updated)
 
-    { config with Overrides = newOverrides }
+    { config with
+        Overrides =
+            lowered
+            |> List.fold (fun acc (name, ovr) -> Map.add name ovr acc) config.Overrides
+    }
 
 let loosenRaw (raw: RawConfig) (files: FileCoverage list) : RawConfig =
     let resolved = resolveConfig raw

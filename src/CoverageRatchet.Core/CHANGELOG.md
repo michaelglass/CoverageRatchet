@@ -5,6 +5,7 @@
 - feat!: `ReaderOptions` gains `Root: string option`. When it is set and a file's path lies under it (ignoring case, `/` and `\` alike), the directory rules see only the directories below it, so a checkout under a directory named `tests`, `test` or `obj` is read. `ReaderOptions.defaults` has `Root = None`, which keeps matching the whole path; a record built field by field must now give `Root`.
 - fix: a file's key (`FileCoverage.FileName`, `RawLine.FileName`, `ExcludedFile.FileName`) is the text after the last `/` or `\` on every OS. `Path.GetFileName` splits on `\` only on Windows, so a report written on Windows and read on macOS or Linux keyed each file by its whole path, and floors keyed by base name did not match it.
 - feat: `Ratchet.reasonWarnings before after` lists each percentage or count floor that moved between two `RawConfig`s and has a `reason`, matched by file and platform, as `File.fs (platform): branch 91 -> 90; its reason may quote the old number`.
+- feat!: `Ratchet.loosen` (and `loosenRaw`) lowers only the files in the list that fail their floor, and only the failing number, adding an override with `"loosened automatically"` for a failing file without one. A passing file's override is no longer tightened or removed. Pass fewer files to loosen fewer.
 
 ## 0.1.0-alpha.12 - 2026-09-29
 

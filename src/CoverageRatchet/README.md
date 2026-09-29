@@ -10,7 +10,7 @@ Per-file code coverage enforcement that only goes up. CoverageRatchet reads your
 2. CoverageRatchet reads the report and compares each file's line and branch coverage against its threshold.
 3. **`check`** fails the build if any file drops below its threshold.
 4. **`ratchet`** (the default command) updates thresholds to match current coverage -- thresholds only go up, not down.
-5. **`loosen`** sets thresholds to whatever coverage is right now, so `check` passes immediately.
+5. **`loosen`** lowers the floors of the files that fail to their current coverage, so `check` passes immediately. Passing files are left alone.
 6. **`baseline-lines`** records each file's current *covered-line count* as a floor (see [Count floors](#count-floors)).
 7. **`targets`** lists files sorted by coverage to find improvement opportunities.
 8. **`gaps`** shows uncovered branch points per file with line numbers.
@@ -119,13 +119,21 @@ and `targets` names them with the rule that matched:
 
 ### Loosen thresholds
 
-If you need `check` to pass right now (e.g., after a big refactor that dropped coverage), loosen sets every file's threshold to its current actual coverage:
+If you need `check` to pass right now (e.g., after a big refactor that dropped coverage), `loosen` lowers the floor of each file that fails `check` to its current coverage:
 
 ```bash
 coverageratchet loosen
 ```
 
-This always exits 0. Files that were already at 100% don't get an override. New overrides get the reason `"loosened automatically"`.
+Only failing files change, and only the number that fails moves down: a file failing its line floor keeps its branch floor. A failing file without a floor gets one, with the reason `"loosened automatically"`. A passing file's entry is left exactly as it is on disk, reason included, even when it sits below the current coverage on purpose (a Linux value, say) or the file is at 100% and keeps a floor anyway. Tightening is `ratchet`'s job.
+
+To loosen only some files, name them with `--file` (repeatable):
+
+```bash
+coverageratchet loosen --file TestRunner.fs
+```
+
+Naming a file the report did not measure writes nothing and exits 2; otherwise `loosen` exits 0.
 
 Neither `ratchet` nor `loosen` rewrites a `reason`. When either one moves a floor that has a reason, it names the floor so you can reread the prose:
 

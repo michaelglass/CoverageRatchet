@@ -28,7 +28,7 @@ type Command =
         CmdArg("Path to the JSON config file", Default = "coverage-ratchet.json")>] Ratchet of config: string option
     | [<Cmd("Check coverage against thresholds (exits non-zero if any file fails)");
         CmdArg("Path to the JSON config file", Default = "coverage-ratchet.json")>] Check of config: string option
-    | [<Cmd("Set thresholds down to current coverage (makes check pass immediately)");
+    | [<Cmd("Lower failing files' floors to current coverage (makes check pass immediately)");
         CmdArg("Path to the JSON config file", Default = "coverage-ratchet.json")>] Loosen of config: string option
     | [<Cmd("Write per-file coverage results as JSON for CI artifact upload");
         CmdArg("Path to the JSON config file", Default = "coverage-ratchet.json");
@@ -67,7 +67,7 @@ let private mergeBaselinesDescription =
 /// Flags accepted before or after the command.
 [<RequireQualifiedAccess>]
 type GlobalFlag =
-    | [<CmdFlag(Repeatable = true, Description = "(baseline-lines only) re-baseline only this file's count floor")>] File of
+    | [<CmdFlag(Repeatable = true, Description = "(baseline-lines and loosen only) change only this file's floor")>] File of
         name: string
     | [<CmdFlag(Description = searchDirDescription)>] SearchDir of path: string
     | [<CmdFlag(Description = mergeBaselinesDescription)>] MergeBaselines
@@ -312,31 +312,53 @@ let private baselineFiles (configPath: string) (files: FileCoverage list) =
 
     0
 
-/// `scope` limits the re-baseline to the named files; empty means every file in the
-/// report. Naming a file the report did not measure writes nothing and exits 2.
-let private runBaselineLines (configPath: string) (scope: string list) (allFiles: FileCoverage list) =
+/// The files `scope` names (every file when it is empty), or `None` after saying
+/// which named files the report did not measure: a floor for those cannot be written.
+let private scopedFiles (commandName: string) (scope: string list) (allFiles: FileCoverage list) =
     let measured = allFiles |> List.map (fun f -> f.FileName) |> Set.ofList
     let unmeasured = scope |> List.filter (fun name -> not (Set.contains name measured))
 
     if not (List.isEmpty unmeasured) then
-        eprintfn "baseline-lines: this run did not measure %s; nothing written." (String.concat ", " unmeasured)
-        2
+        eprintfn "%s: this run did not measure %s; nothing written." commandName (String.concat ", " unmeasured)
+        None
+    elif List.isEmpty scope then
+        Some allFiles
     else
-        let files =
-            if List.isEmpty scope then
-                allFiles
-            else
-                allFiles |> List.filter (fun f -> List.contains f.FileName scope)
+        Some(allFiles |> List.filter (fun f -> List.contains f.FileName scope))
 
-        baselineFiles configPath files
+/// `scope` limits the re-baseline to the named files; empty means every file in the
+/// report. Naming a file the report did not measure writes nothing and exits 2.
+let private runBaselineLines (configPath: string) (scope: string list) (allFiles: FileCoverage list) =
+    match scopedFiles "baseline-lines" scope allFiles with
+    | None -> 2
+    | Some files -> baselineFiles configPath files
 
-let private runLoosen (configPath: string) (files: FileCoverage list) =
-    let raw = loadRawConfig configPath
-    let newRaw = loosenRaw raw files
-    saveRawConfig configPath newRaw
-    warnAboutReasons raw newRaw
-    printfn "Loosen complete: thresholds set to current coverage"
-    0
+/// Lower the floors of the failing files in `scope` (every file when empty) and
+/// leave every other entry as it is on disk. Naming a file the report did not
+/// measure writes nothing and exits 2.
+let private runLoosen (configPath: string) (scope: string list) (allFiles: FileCoverage list) =
+    match scopedFiles "loosen" scope allFiles with
+    | None -> 2
+    | Some files ->
+        let raw = loadRawConfig configPath
+        let before = resolveConfig raw
+        let newRaw = loosenRaw raw files
+        saveRawConfig configPath newRaw
+        warnAboutReasons raw newRaw
+        let after = resolveConfig newRaw
+
+        let added, lowered =
+            files
+            |> List.fold
+                (fun (add, low) file ->
+                    match Map.tryFind file.FileName before.Overrides, Map.tryFind file.FileName after.Overrides with
+                    | None, Some _ -> add + 1, low
+                    | Some old, Some updated when old <> updated -> add, low + 1
+                    | _ -> add, low)
+                (0, 0)
+
+        printfn "Loosen complete: %d floors added, %d lowered; passing files left as they were" added lowered
+        0
 
 /// `check` that also writes a results file. The file is written before the verdict,
 /// so a CI job can upload it from a red run; the exit code matches `check`.
@@ -717,7 +739,7 @@ let internal runLoosenFromCi
 type CoverageFileCommand =
     | CfRatchet
     | CfCheck
-    | CfLoosen
+    | CfLoosen of scope: string list
     | CfBaselineLines of scope: string list
     | CfCheckJson of output: string option
     | CfTargets
@@ -729,7 +751,7 @@ let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string)
     match cmd with
     | CfRatchet -> runRatchet configPath files
     | CfCheck -> runCheck configPath report.Excluded files
-    | CfLoosen -> runLoosen configPath files
+    | CfLoosen scope -> runLoosen configPath scope files
     | CfBaselineLines scope -> runBaselineLines configPath scope files
     | CfCheckJson outputOpt ->
         let outputPath = outputOpt |> Option.defaultValue "coverage-results.json"
@@ -737,7 +759,7 @@ let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string)
     | CfTargets -> runTargets configPath report.Excluded files
     | CfGaps -> runGaps report.Lines
 
-/// `fileScope` is the `--file` list; only `baseline-lines` accepts one.
+/// `fileScope` is the `--file` list; only `baseline-lines` and `loosen` accept one.
 let runScoped
     (fileScope: string list)
     (command: Command)
@@ -749,12 +771,11 @@ let runScoped
     | RefreshBaseline
     | Ratchet _
     | Check _
-    | Loosen _
     | CheckJson _
     | Targets _
     | Gaps _
     | LoosenFromCi _
-    | ProposeFromCi _ when not (List.isEmpty fileScope) -> Error "--file applies to baseline-lines only"
+    | ProposeFromCi _ when not (List.isEmpty fileScope) -> Error "--file applies to baseline-lines and loosen only"
     | Merge {
                 Baseline = baseline
                 Partial = partialFile
@@ -797,7 +818,7 @@ let runScoped
             match command with
             | Ratchet _ -> Some CfRatchet
             | Check _ -> Some CfCheck
-            | Loosen _ -> Some CfLoosen
+            | Loosen _ -> Some(CfLoosen fileScope)
             | BaselineLines _ -> Some(CfBaselineLines fileScope)
             | CheckJson(output = outputOpt) -> Some(CfCheckJson outputOpt)
             | Targets _ -> Some CfTargets
@@ -878,9 +899,21 @@ Use in CI. Files not listed in [config] must hit 100%/100%.
     | [ "loosen" ] ->
         Some
             """
-Lower thresholds in [config] to match current coverage so 'check'
-passes. Use sparingly — bootstrapping, or after a deliberate drop.
-Unlike 'ratchet' this can move thresholds DOWN.
+Lower the floors of the files that FAIL 'check' to their current
+coverage, so 'check' passes. Use sparingly — bootstrapping, or after a
+deliberate drop. Unlike 'ratchet' this can move thresholds DOWN.
+
+Only failing files change, and only the failing number moves: a file
+without a floor gets one ("loosened automatically"), a file with one has
+it lowered. Every passing file's entry is left exactly as it is on disk,
+reason included — even one set below its current coverage on purpose,
+say a Linux value. Tightening is 'ratchet's job.
+
+Limit the write to named files with --file <name> (repeatable):
+
+  coverageratchet loosen ratchet.json --file Foo.fs
+
+Naming a file the report did not measure writes nothing and exits 2.
 
 Applies to PERCENTAGE floors only. The covered-line count floors live
 in the separate "countFloors" section; re-baseline those with

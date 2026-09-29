@@ -2962,3 +2962,116 @@ let ``main - without --merge-baselines no baseline is written`` () =
 
         test <@ main [| "loosen"; configPath; "--search-dir"; tmpDir |] = 0 @>
         test <@ not (File.Exists(Path.Combine(tmpDir, "coverage.baseline.xml"))) @>)
+
+// --- loosen: only failing files change ---
+
+/// Linux.fs is floored at a Linux value below what this run measures, and
+/// DeadCode.fs is at 100% but keeps its floor on purpose: neither may change.
+let private loosenDocument =
+    """{
+  "overrides": {
+    "Linux.fs": {
+      "line": 40,
+      "branch": 30,
+      "reason": "Linux CI value — `macOS` measures \"more\""
+    },
+    "DeadCode.fs": {
+      "line": 90,
+      "branch": 100,
+      "reason": "kept on purpose"
+    },
+    "Lowered.fs": {
+      "line": 90,
+      "branch": 100,
+      "reason": "was 90"
+    }
+  }
+}"""
+
+let private loosenReport =
+    makeCountCoverageXml
+        [
+            "Linux.fs", 8, 10
+            "DeadCode.fs", 10, 10
+            "Lowered.fs", 7, 10
+            "New.fs", 5, 10
+            "Fine.fs", 10, 10
+        ]
+
+let private withLoosenFixture (action: string -> string -> unit) =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), loosenReport)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        File.WriteAllText(configPath, loosenDocument)
+        action tmpDir configPath)
+
+[<Fact>]
+let ``runScoped - loosen lowers and adds floors for failing files and leaves every other byte`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let output, result =
+            withCapturedConsole (fun () -> runScoped [] (Loosen(config = Some configPath)) tmpDir false)
+
+        let expected =
+            loosenDocument
+                .Replace(
+                    "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
+                    "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
+                )
+                .Replace(
+                    "      \"reason\": \"was 90\"\n    }\n",
+                    "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+                )
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = expected @>
+        test <@ output.Contains("Loosen complete: 1 floors added, 1 lowered; passing files left as they were") @>
+        test <@ output.Contains("Warning: Lowered.fs: line 90 -> 70; its reason may quote the old number") @>)
+
+[<Fact>]
+let ``runScoped - loosen then check passes without touching the passing files`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let _ = runScoped [] (Loosen(config = Some configPath)) tmpDir false
+        let config = loadConfig configPath
+
+        test <@ run (Check(config = Some configPath)) tmpDir false = Ok 0 @>
+        test <@ config.Overrides.["Linux.fs"].Line = 40.0 @>
+        test <@ config.Overrides.ContainsKey "DeadCode.fs" @>
+        test <@ not (config.Overrides.ContainsKey "Fine.fs") @>)
+
+[<Fact>]
+let ``runScoped - loosen --file changes only the named failing file`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let result = runScoped [ "New.fs" ] (Loosen(config = Some configPath)) tmpDir false
+
+        let expected =
+            loosenDocument.Replace(
+                "      \"reason\": \"was 90\"\n    }\n",
+                "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+            )
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = expected @>)
+
+[<Fact>]
+let ``runScoped - loosen --file on a passing file changes nothing`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let output, result =
+            withCapturedConsole (fun () ->
+                runScoped [ "Linux.fs"; "DeadCode.fs" ] (Loosen(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = loosenDocument @>
+        test <@ output.Contains("Loosen complete: 0 floors added, 0 lowered") @>)
+
+[<Fact>]
+let ``runScoped - loosen --file names a file the report did not measure and refuses`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let result =
+            runScoped [ "New.fs"; "Missing.fs" ] (Loosen(config = Some configPath)) tmpDir false
+
+        test <@ result = Ok 2 @>
+        test <@ File.ReadAllText(configPath) = loosenDocument @>)
+
+[<Fact>]
+let ``--file - is accepted by loosen`` () =
+    test <@ parseFileScope [| "loosen"; "--file"; "New.fs" |] = Ok([ "New.fs" ], Loosen None) @>
