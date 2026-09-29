@@ -2356,6 +2356,24 @@ let ``run - baseline-lines raises a floor without the lowered warning`` () =
         test <@ config.CountFloors.["Foo.fs"].CoveredLines = 3 @>)
 
 [<Fact>]
+let ``run - baseline-lines warns when it moves a count floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 30)
+
+        let configPath = Path.Combine(tmpDir, "config.json")
+
+        File.WriteAllText(
+            configPath,
+            """{ "countFloors": { "Foo.fs": { "coveredLines": 9, "coveredBranches": 0, "reason": "9 lines" } } }"""
+        )
+
+        let output, result =
+            withCapturedConsole (fun () -> run (BaselineLines(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ output.Contains("Warning: Foo.fs: coveredLines 9 -> 3; its reason may quote the old number") @>)
+
+[<Fact>]
 let ``run - baseline-lines then check is green, and a later drop is caught`` () =
     withTempDir (fun tmpDir ->
         let xmlPath = Path.Combine(tmpDir, "coverage.cobertura.xml")

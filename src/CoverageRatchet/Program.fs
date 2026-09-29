@@ -248,62 +248,65 @@ let private runCheck (configPath: string) (exclusions: ExcludedFile list) (files
 
     exitCodeOf verdict
 
-/// `ratchet` and `loosen` never rewrite a reason, so name each one whose floor moved.
-let private warnAboutReasons (before: RawConfig) (after: RawConfig) =
-    for warning in reasonWarnings before after do
-        printfn "Warning: %s" warning
+/// Load the floor file, apply `operation`, and when `changeOf` finds a change in its
+/// result, save the new config and name each moved floor that has a reason: no
+/// operation rewrites a reason, so the person reading the warning has to.
+let private updateConfig
+    (configPath: string)
+    (changeOf: 'result -> RawChange option)
+    (operation: RawConfig -> 'result)
+    : 'result =
+    let result = loadRawConfig configPath |> operation
+
+    match changeOf result with
+    | Some change ->
+        saveRawConfig configPath change.Config
+
+        for warning in reasonWarnings change.Moves do
+            printfn "Warning: %s" warning
+    | None -> ()
+
+    result
+
+/// How many files have a move that `keep` accepts.
+let private filesWith (keep: FloorMove -> bool) (moves: FloorMove list) =
+    moves |> List.filter keep |> List.distinctBy (fun m -> m.File) |> List.length
 
 let private runRatchet (configPath: string) (files: FileCoverage list) =
-    let raw = loadRawConfig configPath
-    let config = resolveConfig raw
+    let status =
+        updateConfig
+            configPath
+            (function
+            | NoChanges -> None
+            | Tightened change
+            | Failed(change, _) -> Some change)
+            (fun raw -> ratchetRawWithStatus raw files)
 
-    match ratchetRawWithStatus raw files with
+    match status with
     | NoChanges ->
         printfn "Ratchet complete: no changes needed"
         0
-    | Tightened newRaw ->
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
-        let newConfig = resolveConfig newRaw
-
-        let removed = config.Overrides.Count - newConfig.Overrides.Count
-
+    | Tightened change ->
         let tightened =
-            newConfig.Overrides
-            |> Map.toList
-            |> List.filter (fun (name, ovr) ->
-                match Map.tryFind name config.Overrides with
-                | Some old -> old.Line <> ovr.Line || old.Branch <> ovr.Branch
-                | None -> false)
-            |> List.length
+            change.Moves |> filesWith (fun m -> m.Field = "line" || m.Field = "branch")
 
-        printfn "Ratchet complete: %d overrides tightened, %d removed" tightened removed
+        printfn "Ratchet complete: %d overrides tightened, %d removed" tightened change.Removed.Length
         1
-    | Failed(newRaw, failedFiles) ->
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
+    | Failed(_, failedFiles) ->
         eprintfn "Coverage below threshold for: %s" (String.concat ", " failedFiles)
         2
 
 let private baselineFiles (configPath: string) (files: FileCoverage list) =
-    let raw = loadRawConfig configPath
-    let before = resolveConfig raw
-    let newRaw = baselineCountFloorsRaw raw files
-    saveRawConfig configPath newRaw
-    let after = resolveConfig newRaw
+    let change =
+        updateConfig configPath Some (fun raw -> baselineCountFloorsRaw raw files)
 
-    let lowered, raised, added =
-        files
-        |> List.fold
-            (fun (lo, hi, add) file ->
-                match Map.tryFind file.FileName before.CountFloors, Map.tryFind file.FileName after.CountFloors with
-                | None, Some _ -> lo, hi, add + 1
-                | Some oldFloor, Some newFloor when newFloor.CoveredLines < oldFloor.CoveredLines -> lo + 1, hi, add
-                | Some oldFloor, Some newFloor when newFloor.CoveredLines > oldFloor.CoveredLines -> lo, hi + 1, add
-                | _ -> lo, hi, add)
-            (0, 0, 0)
+    let lowered =
+        change.Moves |> filesWith (fun m -> m.Field = "coveredLines" && m.New < m.Old)
 
-    printfn "Baseline complete: %d floors added, %d raised, %d LOWERED" added raised lowered
+    let raised =
+        change.Moves |> filesWith (fun m -> m.Field = "coveredLines" && m.New > m.Old)
+
+    printfn "Baseline complete: %d floors added, %d raised, %d LOWERED" change.Added.Length raised lowered
 
     if lowered > 0 then
         printfn ""
@@ -333,31 +336,19 @@ let private runBaselineLines (configPath: string) (scope: string list) (allFiles
     | None -> 2
     | Some files -> baselineFiles configPath files
 
-/// Lower the floors of the failing files in `scope` (every file when empty) and
-/// leave every other entry as it is on disk. Naming a file the report did not
-/// measure writes nothing and exits 2.
+/// Naming a file the report did not measure writes nothing and exits 2.
 let private runLoosen (configPath: string) (scope: string list) (allFiles: FileCoverage list) =
     match scopedFiles "loosen" scope allFiles with
     | None -> 2
     | Some files ->
-        let raw = loadRawConfig configPath
-        let before = resolveConfig raw
-        let newRaw = loosenRaw raw files
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
-        let after = resolveConfig newRaw
+        let change = updateConfig configPath Some (fun raw -> loosenRaw raw files)
+        let lowered = change.Moves |> filesWith (fun _ -> true)
 
-        let added, lowered =
-            files
-            |> List.fold
-                (fun (add, low) file ->
-                    match Map.tryFind file.FileName before.Overrides, Map.tryFind file.FileName after.Overrides with
-                    | None, Some _ -> add + 1, low
-                    | Some old, Some updated when old <> updated -> add, low + 1
-                    | _ -> add, low)
-                (0, 0)
+        printfn
+            "Loosen complete: %d floors added, %d lowered; passing files left as they were"
+            change.Added.Length
+            lowered
 
-        printfn "Loosen complete: %d floors added, %d lowered; passing files left as they were" added lowered
         0
 
 /// `check` that also writes a results file. The file is written before the verdict,
