@@ -844,13 +844,6 @@ let runScoped
             | Error message -> Error message
             | Ok _ when List.isEmpty xmlPaths -> Error "No coverage.cobertura.xml found"
             | Ok readerOptions ->
-                // Directory rules apply below the config file's directory only, so a
-                // checkout that itself sits under e.g. `tests/` is still measured.
-                let readerOptions =
-                    { readerOptions with
-                        Root = Some(Path.GetDirectoryName(Path.GetFullPath configPath))
-                    }
-
                 let report = xmlPaths |> List.map File.ReadAllText |> readReports readerOptions
 
                 let result = runWithCoverageFiles cmd configPath report

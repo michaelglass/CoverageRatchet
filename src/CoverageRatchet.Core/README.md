@@ -142,7 +142,6 @@ type ReaderOptions =
     {
         IncludedExtensions: string[]
         ExcludedDirectories: DirectoryRule[]
-        /// The directory the rules are relative to; the CLI passes its config file's directory.
         Root: string option
     }
 ```

@@ -418,31 +418,39 @@ let loadRawConfig (path: string) : RawConfig =
             }
 
 /// The reader options a floor file asks for: `ReaderOptions.defaults`, narrowed to the
-/// file's `"includedExtensions"` list when it has one, e.g. `"includedExtensions": [".fs"]`.
+/// file's `"includedExtensions"` list when it has one, e.g. `"includedExtensions": [".fs"]`,
+/// with `Root` set to the file's directory, so the directory rules apply below it only.
 let loadReaderOptions (path: string) : Result<ReaderOptions, string> =
     let text = if File.Exists(path) then File.ReadAllText(path) else ""
 
-    if System.String.IsNullOrWhiteSpace(text) then
-        Ok ReaderOptions.defaults
-    else
-        use doc = JsonDocument.Parse(text)
+    let options =
+        if System.String.IsNullOrWhiteSpace(text) then
+            Ok ReaderOptions.defaults
+        else
+            use doc = JsonDocument.Parse(text)
 
-        match doc.RootElement.TryGetProperty("includedExtensions") with
-        | false, _ -> Ok ReaderOptions.defaults
-        | true, list ->
-            let isString (el: JsonElement) = el.ValueKind = JsonValueKind.String
+            match doc.RootElement.TryGetProperty("includedExtensions") with
+            | false, _ -> Ok ReaderOptions.defaults
+            | true, list ->
+                let isString (el: JsonElement) = el.ValueKind = JsonValueKind.String
 
-            if
-                list.ValueKind <> JsonValueKind.Array
-                || not (list.EnumerateArray() |> Seq.forall isString)
-            then
-                Error(sprintf "%s: \"includedExtensions\" must be a list of extensions, e.g. [\".fs\"]" path)
-            else
-                list.EnumerateArray()
-                |> Seq.map (fun el -> el.GetString())
-                |> Seq.toList
-                |> ReaderOptions.includingOnly
-                |> Result.mapError (sprintf "%s: \"includedExtensions\": %s" path)
+                if
+                    list.ValueKind <> JsonValueKind.Array
+                    || not (list.EnumerateArray() |> Seq.forall isString)
+                then
+                    Error(sprintf "%s: \"includedExtensions\" must be a list of extensions, e.g. [\".fs\"]" path)
+                else
+                    list.EnumerateArray()
+                    |> Seq.map (fun el -> el.GetString())
+                    |> Seq.toList
+                    |> ReaderOptions.includingOnly
+                    |> Result.mapError (sprintf "%s: \"includedExtensions\": %s" path)
+
+    options
+    |> Result.map (fun o ->
+        { o with
+            Root = Some(Path.GetDirectoryName(Path.GetFullPath path))
+        })
 
 /// Pick the entry for the running platform, falling back to a platform-less one.
 /// A file whose only entries name OTHER platforms resolves to nothing and is

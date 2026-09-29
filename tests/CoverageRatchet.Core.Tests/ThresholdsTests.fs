@@ -932,23 +932,53 @@ let private withConfigText (text: string option) (action: string -> unit) =
     finally
         File.Delete(path)
 
+let private configDir (path: string) =
+    Path.GetDirectoryName(Path.GetFullPath path)
+
+/// `ReaderOptions.defaults` rooted at the config file's directory, as `readerOptionsFrom` spells it.
+let private atConfigDir =
+    { ReaderOptions.defaults with
+        Root = Some "<dir>"
+    }
+
 let private readerOptionsFrom (text: string) =
     let mutable result = Error "not run"
 
     withConfigText (Some text) (fun path ->
-        result <- loadReaderOptions path |> Result.mapError (fun e -> e.Replace(path, "<config>")))
+        result <-
+            loadReaderOptions path
+            |> Result.map (fun o ->
+                { o with
+                    Root = o.Root |> Option.map (fun r -> r.Replace(configDir path, "<dir>"))
+                })
+            |> Result.mapError (fun e -> e.Replace(path, "<config>")))
 
     result
 
 [<Fact>]
 let ``loadReaderOptions - a missing file reads every source language`` () =
-    withConfigText None (fun path -> test <@ loadReaderOptions path = Ok ReaderOptions.defaults @>)
+    withConfigText None (fun path ->
+        test
+            <@
+                loadReaderOptions path =
+                    Ok
+                        { ReaderOptions.defaults with
+                            Root = Some(configDir path)
+                        }
+            @>)
+
+[<Fact>]
+let ``loadReaderOptions - the root is the config file's directory`` () =
+    let dir = Path.Combine(Path.GetTempPath(), string (System.Guid.NewGuid()))
+    let path = Path.Combine(dir, "coverage-ratchet.json")
+
+    test <@ loadReaderOptions path |> Result.map (fun o -> o.Root) = Ok(Some dir) @>
 
 [<Fact>]
 let ``loadReaderOptions - a file without includedExtensions reads every source language`` () =
-    test <@ readerOptionsFrom """{ "overrides": {} }""" = Ok ReaderOptions.defaults @>
-    test <@ readerOptionsFrom "{}" = Ok ReaderOptions.defaults @>
-    test <@ readerOptionsFrom "" = Ok ReaderOptions.defaults @>
+    test <@ readerOptionsFrom """{ "overrides": {} }""" = Ok atConfigDir @>
+    test <@ readerOptionsFrom "{}" = Ok atConfigDir @>
+    test <@ readerOptionsFrom "" = Ok atConfigDir @>
 
 [<Fact>]
 let ``loadReaderOptions - includedExtensions narrows the languages read`` () =
@@ -956,7 +986,7 @@ let ``loadReaderOptions - includedExtensions narrows the languages read`` () =
         <@
             readerOptionsFrom """{ "includedExtensions": [".fs"], "overrides": {} }""" =
                 Ok
-                    { ReaderOptions.defaults with
+                    { atConfigDir with
                         IncludedExtensions = [| ".fs" |]
                     }
         @>
@@ -1002,11 +1032,4 @@ let ``saveRawConfig - keeps includedExtensions`` () =
                 RawOverrides = Map.ofList [ "Foo.fs", [ percentageFloor 90.0 80.0 ] ]
             }
 
-        test
-            <@
-                loadReaderOptions path =
-                    Ok
-                        { ReaderOptions.defaults with
-                            IncludedExtensions = [| ".fs" |]
-                        }
-            @>)
+        test <@ loadReaderOptions path |> Result.map (fun o -> o.IncludedExtensions) = Ok [| ".fs" |] @>)
