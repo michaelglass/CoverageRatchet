@@ -300,6 +300,11 @@ let newRaw: RawConfig = mergeFromCi raw Platform.Linux ciResults
 // Parse coverage-thresholds artifact JSON (shape produced by CoverageRatchet check-json)
 let platform, results = parseCiThresholds jsonString
 
+// Or the whole artifact as a record: platform, per-file results in report order,
+// and the files the reader skipped
+let ci: CiResults = CiResults.parse jsonString
+let json: string = CiResults.serialize ci
+
 // Count floors: raise monotonically, or re-baseline to current counts
 let newConfig: Config = ratchetCountFloors config files
 let newConfig: Config = baselineCountFloors config files
@@ -311,7 +316,7 @@ let change: RawChange = baselineCountFloorsRaw raw files
 
 `loosen` lowers the floor of each file in `files` that fails it to its current coverage (rounded down), and moves only the failing number. A failing file without an override gets one with `reason = "loosened automatically"`. A passing file's override is never changed or removed, so run `loosen` on the files you want loosened and leave tightening to `ratchet`.
 
-No raw operation rewrites a `reason`. `reasonWarnings change.Moves` names each moved floor (percentage or count) that has one, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`; the CLI prints them after `ratchet`, `loosen` and `baseline-lines`.
+No raw operation rewrites a `reason`. `change.Moves` lists each moved floor as a `FloorMove` (`File`, `Platform`, `Field`, `Old`, `New`, `Reason`), and `reasonWarnings change.Moves` names each moved floor (percentage or count) that has one, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`; the CLI prints them after `ratchet`, `loosen` and `baseline-lines`.
 
 `ratchetCountFloors` is monotonic and **never enrols new files** — an impact-filtered partial run must not be able to write a floor from coverage that never ran. `baselineCountFloors` records current counts for every observed file and *may lower* a floor; it is both the bootstrap and the deliberate re-baseline after removing covered code, and it preserves any recorded `reason`.
 
