@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.12 - 2026-09-29
+
 - chore: CoverageRatchet.Core now lives in its own repository, [github.com/michaelglass/CoverageRatchet](https://github.com/michaelglass/CoverageRatchet), split out of MichaelsWackyFsPackageTools with its history and release tags. The package id and its API are unchanged.
 - feat!: **the reader measures C# and VB, and decides by directory instead of file name.** `ReaderOptions.defaults` reads `.fs`, `.cs` and `.vb` (was `.fs` only) and skips a file when a directory in its path is a test project (`tests`, `test`, `*.Tests`, `*.Test`), `obj`, or vendored (`paket-files`, `vendor`, `node_modules`, `.fable`), ignoring case. The file-name rule is gone: it dropped any production file whose name contained `Test` (`TestKit.fs`, `TestDataSeeder.fs`), and `AssemblyInfo`/`AssemblyAttributes` are generated under `obj/`. Expect more files in the report: a C# or VB file, or an F# file with `Test` in its name, is now measured and held to 100%/100% unless it has a floor.
 - feat!: `ReaderOptions` is `{ IncludedExtensions; ExcludedDirectories: DirectoryRule[] }`, where `DirectoryRule` is `Named of string | NameEndsWith of string`. `ExcludedFileNamePatterns` and `ExcludedPathPatterns` are removed, and `ExclusionReason` is `ExcludedByExtension | ExcludedByDirectory of DirectoryRule` (`ExcludedByFileName` and `ExcludedByPath` are removed). Extensions match ignoring case.
