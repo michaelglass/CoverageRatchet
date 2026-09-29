@@ -64,10 +64,15 @@ let private mergeBaselinesDescription =
     "before reading coverage, merge each coverage.cobertura.xml onto its sibling coverage.baseline.xml "
     + "(max hits per line) so partial test runs cannot lower the ratchet. Bootstraps a baseline on first use."
 
+/// The commands `takesFileScope` accepts, as the CLI names them. An attribute needs a
+/// literal; a test holds the two together.
+[<Literal>]
+let internal fileScopedCommands = "baseline-lines and loosen"
+
 /// Flags accepted before or after the command.
 [<RequireQualifiedAccess>]
 type GlobalFlag =
-    | [<CmdFlag(Repeatable = true, Description = "(baseline-lines and loosen only) change only this file's floor")>] File of
+    | [<CmdFlag(Repeatable = true, Description = "(" + fileScopedCommands + " only) change only this file's floor")>] File of
         name: string
     | [<CmdFlag(Description = searchDirDescription)>] SearchDir of path: string
     | [<CmdFlag(Description = mergeBaselinesDescription)>] MergeBaselines
@@ -248,62 +253,65 @@ let private runCheck (configPath: string) (exclusions: ExcludedFile list) (files
 
     exitCodeOf verdict
 
-/// `ratchet` and `loosen` never rewrite a reason, so name each one whose floor moved.
-let private warnAboutReasons (before: RawConfig) (after: RawConfig) =
-    for warning in reasonWarnings before after do
-        printfn "Warning: %s" warning
+/// Load the floor file, apply `operation`, and when `changeOf` finds a change in its
+/// result, save the new config and name each moved floor that has a reason: no
+/// operation rewrites a reason, so the person reading the warning has to.
+let private updateConfig
+    (configPath: string)
+    (changeOf: 'result -> RawChange option)
+    (operation: RawConfig -> 'result)
+    : 'result =
+    let result = loadRawConfig configPath |> operation
+
+    match changeOf result with
+    | Some change ->
+        saveRawConfig configPath change.Config
+
+        for warning in reasonWarnings change.Moves do
+            printfn "Warning: %s" warning
+    | None -> ()
+
+    result
+
+/// How many files have a move that `keep` accepts.
+let private filesWith (keep: FloorMove -> bool) (moves: FloorMove list) =
+    moves |> List.filter keep |> List.distinctBy (fun m -> m.File) |> List.length
 
 let private runRatchet (configPath: string) (files: FileCoverage list) =
-    let raw = loadRawConfig configPath
-    let config = resolveConfig raw
+    let status =
+        updateConfig
+            configPath
+            (function
+            | NoChanges -> None
+            | Tightened change
+            | Failed(change, _) -> Some change)
+            (fun raw -> ratchetRawWithStatus raw files)
 
-    match ratchetRawWithStatus raw files with
+    match status with
     | NoChanges ->
         printfn "Ratchet complete: no changes needed"
         0
-    | Tightened newRaw ->
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
-        let newConfig = resolveConfig newRaw
-
-        let removed = config.Overrides.Count - newConfig.Overrides.Count
-
+    | Tightened change ->
         let tightened =
-            newConfig.Overrides
-            |> Map.toList
-            |> List.filter (fun (name, ovr) ->
-                match Map.tryFind name config.Overrides with
-                | Some old -> old.Line <> ovr.Line || old.Branch <> ovr.Branch
-                | None -> false)
-            |> List.length
+            change.Moves |> filesWith (fun m -> m.Field = "line" || m.Field = "branch")
 
-        printfn "Ratchet complete: %d overrides tightened, %d removed" tightened removed
+        printfn "Ratchet complete: %d overrides tightened, %d removed" tightened change.Removed.Length
         1
-    | Failed(newRaw, failedFiles) ->
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
+    | Failed(_, failedFiles) ->
         eprintfn "Coverage below threshold for: %s" (String.concat ", " failedFiles)
         2
 
 let private baselineFiles (configPath: string) (files: FileCoverage list) =
-    let raw = loadRawConfig configPath
-    let before = resolveConfig raw
-    let newRaw = baselineCountFloorsRaw raw files
-    saveRawConfig configPath newRaw
-    let after = resolveConfig newRaw
+    let change =
+        updateConfig configPath Some (fun raw -> baselineCountFloorsRaw raw files)
 
-    let lowered, raised, added =
-        files
-        |> List.fold
-            (fun (lo, hi, add) file ->
-                match Map.tryFind file.FileName before.CountFloors, Map.tryFind file.FileName after.CountFloors with
-                | None, Some _ -> lo, hi, add + 1
-                | Some oldFloor, Some newFloor when newFloor.CoveredLines < oldFloor.CoveredLines -> lo + 1, hi, add
-                | Some oldFloor, Some newFloor when newFloor.CoveredLines > oldFloor.CoveredLines -> lo, hi + 1, add
-                | _ -> lo, hi, add)
-            (0, 0, 0)
+    let lowered =
+        change.Moves |> filesWith (fun m -> m.Field = "coveredLines" && m.New < m.Old)
 
-    printfn "Baseline complete: %d floors added, %d raised, %d LOWERED" added raised lowered
+    let raised =
+        change.Moves |> filesWith (fun m -> m.Field = "coveredLines" && m.New > m.Old)
+
+    printfn "Baseline complete: %d floors added, %d raised, %d LOWERED" change.Added.Length raised lowered
 
     if lowered > 0 then
         printfn ""
@@ -333,31 +341,19 @@ let private runBaselineLines (configPath: string) (scope: string list) (allFiles
     | None -> 2
     | Some files -> baselineFiles configPath files
 
-/// Lower the floors of the failing files in `scope` (every file when empty) and
-/// leave every other entry as it is on disk. Naming a file the report did not
-/// measure writes nothing and exits 2.
+/// Naming a file the report did not measure writes nothing and exits 2.
 let private runLoosen (configPath: string) (scope: string list) (allFiles: FileCoverage list) =
     match scopedFiles "loosen" scope allFiles with
     | None -> 2
     | Some files ->
-        let raw = loadRawConfig configPath
-        let before = resolveConfig raw
-        let newRaw = loosenRaw raw files
-        saveRawConfig configPath newRaw
-        warnAboutReasons raw newRaw
-        let after = resolveConfig newRaw
+        let change = updateConfig configPath Some (fun raw -> loosenRaw raw files)
+        let lowered = change.Moves |> filesWith (fun _ -> true)
 
-        let added, lowered =
-            files
-            |> List.fold
-                (fun (add, low) file ->
-                    match Map.tryFind file.FileName before.Overrides, Map.tryFind file.FileName after.Overrides with
-                    | None, Some _ -> add + 1, low
-                    | Some old, Some updated when old <> updated -> add, low + 1
-                    | _ -> add, low)
-                (0, 0)
+        printfn
+            "Loosen complete: %d floors added, %d lowered; passing files left as they were"
+            change.Added.Length
+            lowered
 
-        printfn "Loosen complete: %d floors added, %d lowered; passing files left as they were" added lowered
         0
 
 /// `check` that also writes a results file. The file is written before the verdict,
@@ -371,31 +367,28 @@ let private runCheckJson
     (files: FileCoverage list)
     =
     let config = loadConfig configPath
-    let allResults = buildFileResults config files
 
-    let resultsDict = System.Collections.Generic.Dictionary<string, obj>()
+    let ci: CiResults =
+        {
+            Platform = Platform.current
+            Results =
+                buildFileResults config files
+                |> List.map (fun r ->
+                    r.File.FileName,
+                    {
+                        Line = floor r.File.LinePct
+                        Branch = floor r.File.BranchPct
+                    })
+            Excluded =
+                exclusions
+                |> List.map (fun e ->
+                    {
+                        File = e.FileName
+                        Reason = ExclusionReason.describe e.Reason
+                    })
+        }
 
-    for r in allResults do
-        let entry = System.Collections.Generic.Dictionary<string, obj>()
-        entry.["line"] <- int (floor r.File.LinePct)
-        entry.["branch"] <- int (floor r.File.BranchPct)
-        resultsDict.[r.File.FileName] <- entry
-
-    let wrapper = System.Collections.Generic.Dictionary<string, obj>()
-    wrapper.["platform"] <- Platform.toString Platform.current
-    wrapper.["results"] <- resultsDict
-
-    wrapper.["excluded"] <-
-        exclusions
-        |> List.map (fun e ->
-            let entry = System.Collections.Generic.Dictionary<string, obj>()
-            entry.["file"] <- e.FileName
-            entry.["reason"] <- ExclusionReason.describe e.Reason
-            entry)
-        |> List.toArray
-
-    let json = JsonSerializer.Serialize(wrapper, jsonOptions)
-    File.WriteAllText(outputPath, json)
+    File.WriteAllText(outputPath, CiResults.serialize ci)
 
     let verdict = judge config files
 
@@ -759,7 +752,27 @@ let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string)
     | CfTargets -> runTargets configPath report.Excluded files
     | CfGaps -> runGaps report.Lines
 
-/// `fileScope` is the `--file` list; only `baseline-lines` and `loosen` accept one.
+/// What `command` does with the coverage report, or `None` for a command that reads
+/// none. `fileScope` goes to the cases that carry one.
+let private coverageFileCommand (fileScope: string list) (command: Command) : CoverageFileCommand option =
+    match command with
+    | Ratchet _ -> Some CfRatchet
+    | Check _ -> Some CfCheck
+    | Loosen _ -> Some(CfLoosen fileScope)
+    | BaselineLines _ -> Some(CfBaselineLines fileScope)
+    | CheckJson(output = outputOpt) -> Some(CfCheckJson outputOpt)
+    | Targets _ -> Some CfTargets
+    | Gaps _ -> Some CfGaps
+    | LoosenFromCi _
+    | Merge _
+    | RefreshBaseline
+    | ProposeFromCi _ -> None
+
+/// `--file` is accepted exactly where `coverageFileCommand` hands the scope on.
+let internal takesFileScope (command: Command) =
+    coverageFileCommand [] command <> coverageFileCommand [ "--file" ] command
+
+/// `fileScope` is the `--file` list; only a command that `takesFileScope` accepts one.
 let runScoped
     (fileScope: string list)
     (command: Command)
@@ -767,15 +780,8 @@ let runScoped
     (mergeBaselines: bool)
     : Result<int, string> =
     match command with
-    | Merge _
-    | RefreshBaseline
-    | Ratchet _
-    | Check _
-    | CheckJson _
-    | Targets _
-    | Gaps _
-    | LoosenFromCi _
-    | ProposeFromCi _ when not (List.isEmpty fileScope) -> Error "--file applies to baseline-lines and loosen only"
+    | _ when not (List.isEmpty fileScope || takesFileScope command) ->
+        Error("--file applies to " + fileScopedCommands + " only")
     | Merge {
                 Baseline = baseline
                 Partial = partialFile
@@ -814,21 +820,7 @@ let runScoped
             | RefreshBaseline
             | ProposeFromCi _ -> defaultConfigPath
 
-        let coverageFileCmd =
-            match command with
-            | Ratchet _ -> Some CfRatchet
-            | Check _ -> Some CfCheck
-            | Loosen _ -> Some(CfLoosen fileScope)
-            | BaselineLines _ -> Some(CfBaselineLines fileScope)
-            | CheckJson(output = outputOpt) -> Some(CfCheckJson outputOpt)
-            | Targets _ -> Some CfTargets
-            | Gaps _ -> Some CfGaps
-            | LoosenFromCi _ -> None
-            | Merge _
-            | RefreshBaseline
-            | ProposeFromCi _ -> None
-
-        match coverageFileCmd with
+        match coverageFileCommand fileScope command with
         | None ->
             let runCi = Shell.runWithGitDir (resolveGitDir (Directory.GetCurrentDirectory()))
             Ok(runLoosenFromCi Shell.run runCi configPath)
@@ -844,13 +836,6 @@ let runScoped
             | Error message -> Error message
             | Ok _ when List.isEmpty xmlPaths -> Error "No coverage.cobertura.xml found"
             | Ok readerOptions ->
-                // Directory rules apply below the config file's directory only, so a
-                // checkout that itself sits under e.g. `tests/` is still measured.
-                let readerOptions =
-                    { readerOptions with
-                        Root = Some(Path.GetDirectoryName(Path.GetFullPath configPath))
-                    }
-
                 let report = xmlPaths |> List.map File.ReadAllText |> readReports readerOptions
 
                 let result = runWithCoverageFiles cmd configPath report
@@ -899,25 +884,11 @@ Use in CI. Files not listed in [config] must hit 100%/100%.
     | [ "loosen" ] ->
         Some
             """
-Lower the floors of the files that FAIL 'check' to their current
-coverage, so 'check' passes. Use sparingly — bootstrapping, or after a
-deliberate drop. Unlike 'ratchet' this can move thresholds DOWN.
+Lower the floors of the files that FAIL 'check' to their current coverage,
+moving only the failing number; every passing file's entry is left as it is.
+It moves floors DOWN, so use it sparingly. Percentage floors only.
 
-Only failing files change, and only the failing number moves: a file
-without a floor gets one ("loosened automatically"), a file with one has
-it lowered. Every passing file's entry is left exactly as it is on disk,
-reason included — even one set below its current coverage on purpose,
-say a Linux value. Tightening is 'ratchet's job.
-
-Limit the write to named files with --file <name> (repeatable):
-
-  coverageratchet loosen ratchet.json --file Foo.fs
-
-Naming a file the report did not measure writes nothing and exits 2.
-
-Applies to PERCENTAGE floors only. The covered-line count floors live
-in the separate "countFloors" section; re-baseline those with
-'baseline-lines'.
+  coverageratchet loosen ratchet.json --file Foo.fs   # loosen only Foo.fs
 """
     | [ "baseline-lines" ] ->
         Some

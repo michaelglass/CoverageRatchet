@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Text.Json
 open Xunit
+open Microsoft.FSharp.Reflection
 open Tests.Common
 open Swensen.Unquote
 open CoverageRatchet.Thresholds
@@ -476,17 +477,7 @@ let private configWithFooFloor (configPath: string) (line: float) (reason: strin
     saveConfig
         configPath
         { defaultsConfig with
-            Overrides =
-                Map.ofList
-                    [
-                        "Foo.fs",
-                        {
-                            Line = line
-                            Branch = 100.0
-                            Reason = reason
-                            Platform = None
-                        }
-                    ]
+            Overrides = Map.ofList [ "Foo.fs", ovr line 100.0 reason None ]
         }
 
 [<Fact>]
@@ -2356,6 +2347,24 @@ let ``run - baseline-lines raises a floor without the lowered warning`` () =
         test <@ config.CountFloors.["Foo.fs"].CoveredLines = 3 @>)
 
 [<Fact>]
+let ``run - baseline-lines warns when it moves a count floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 30)
+
+        let configPath = Path.Combine(tmpDir, "config.json")
+
+        File.WriteAllText(
+            configPath,
+            """{ "countFloors": { "Foo.fs": { "coveredLines": 9, "coveredBranches": 0, "reason": "9 lines" } } }"""
+        )
+
+        let output, result =
+            withCapturedConsole (fun () -> run (BaselineLines(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ output.Contains("Warning: Foo.fs: coveredLines 9 -> 3; its reason may quote the old number") @>)
+
+[<Fact>]
 let ``run - baseline-lines then check is green, and a later drop is caught`` () =
     withTempDir (fun tmpDir ->
         let xmlPath = Path.Combine(tmpDir, "coverage.cobertura.xml")
@@ -2636,6 +2645,33 @@ let ``runScoped - --file on a command other than baseline-lines is an error`` ()
 
         test <@ Result.isError result @>
         test <@ File.ReadAllText(configPath) = twoPlatformDocument @>)
+
+[<Fact>]
+let ``--file - is taken by exactly the commands its help and error name`` () =
+    let every =
+        [
+            Ratchet None
+            Check None
+            Loosen None
+            CheckJson(None, None)
+            BaselineLines None
+            Targets None
+            Gaps None
+            LoosenFromCi None
+            Merge
+                {
+                    Baseline = "b"
+                    Partial = "p"
+                    Output = "o"
+                }
+            RefreshBaseline
+            ProposeFromCi("1", None)
+        ]
+
+    test <@ every.Length = FSharpType.GetUnionCases(typeof<Command>).Length @>
+    test <@ every |> List.filter takesFileScope = [ Loosen None; BaselineLines None ] @>
+    test <@ fileScopedCommands = "baseline-lines and loosen" @>
+    test <@ runScoped [ "Foo.fs" ] (Check None) "." false = Error "--file applies to baseline-lines and loosen only" @>
 
 let private parseFileScope (argv: string array) =
     cliSpec.Parse argv
@@ -2998,6 +3034,13 @@ let private loosenReport =
             "Fine.fs", 10, 10
         ]
 
+/// `document` with the floor `loosen` adds for New.fs appended after Lowered.fs.
+let private withNewFloor (document: string) =
+    document.Replace(
+        "      \"reason\": \"was 90\"\n    }\n",
+        "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+    )
+
 let private withLoosenFixture (action: string -> string -> unit) =
     withTempDir (fun tmpDir ->
         File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), loosenReport)
@@ -3012,15 +3055,11 @@ let ``runScoped - loosen lowers and adds floors for failing files and leaves eve
             withCapturedConsole (fun () -> runScoped [] (Loosen(config = Some configPath)) tmpDir false)
 
         let expected =
-            loosenDocument
-                .Replace(
-                    "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
-                    "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
-                )
-                .Replace(
-                    "      \"reason\": \"was 90\"\n    }\n",
-                    "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
-                )
+            loosenDocument.Replace(
+                "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
+                "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
+            )
+            |> withNewFloor
 
         test <@ result = Ok 0 @>
         test <@ File.ReadAllText(configPath) = expected @>
@@ -3043,14 +3082,8 @@ let ``runScoped - loosen --file changes only the named failing file`` () =
     withLoosenFixture (fun tmpDir configPath ->
         let result = runScoped [ "New.fs" ] (Loosen(config = Some configPath)) tmpDir false
 
-        let expected =
-            loosenDocument.Replace(
-                "      \"reason\": \"was 90\"\n    }\n",
-                "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
-            )
-
         test <@ result = Ok 0 @>
-        test <@ File.ReadAllText(configPath) = expected @>)
+        test <@ File.ReadAllText(configPath) = withNewFloor loosenDocument @>)
 
 [<Fact>]
 let ``runScoped - loosen --file on a passing file changes nothing`` () =

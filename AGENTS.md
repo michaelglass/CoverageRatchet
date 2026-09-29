@@ -87,6 +87,10 @@ CoverageRatchet enforces per-file, per-platform floors from
 `coverage-ratchet-CoverageRatchet.Core.json`. **A file with no entry defaults to
 100% line and 100% branch**, not to a weaker fallback.
 
+Each test project's report measures its own package only:
+`tests/CoverageRatchet.Tests/testconfig.json` limits that project's coverage to
+`CoverageRatchet.dll`, so Core's files are floored once, by `CoverageRatchet.Core.Tests`.
+
 - `mise run coverage-check` — run tests and check the floors.
 - `mise run coverage-ratchet` — **tighten** existing floors after coverage
   improves. It never adds a new platform entry.

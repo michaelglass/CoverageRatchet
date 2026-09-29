@@ -43,13 +43,12 @@ type DirectoryRule =
 /// directories below `Root`, so a checkout under e.g. `~/work/tests/` is still read.
 /// A path outside `Root`, or any path when `Root` is `None`, is matched as the report
 /// records it, which for an absolute path includes the directories above the checkout.
-/// `Root` is compared as a string (ignoring case, `/` and `\` alike); the filesystem is
-/// never consulted.
+/// `Root` is compared directory by directory (ignoring case, `/` and `\` alike); the
+/// filesystem is never consulted.
 type ReaderOptions =
     {
         IncludedExtensions: string[]
         ExcludedDirectories: DirectoryRule[]
-        /// The directory the rules are relative to; the CLI passes its config file's directory.
         Root: string option
     }
 // sync:reader-options:end
@@ -147,45 +146,43 @@ let private matches (directory: string) =
     | Named name -> equalsIgnoringCase directory name
     | NameEndsWith suffix -> directory.EndsWith(suffix, ignoringCase)
 
-/// The text after the last `/` or `\`. `Path.GetFileName` splits on `\` only on
-/// Windows, so a report written on Windows would otherwise key a file by its whole
-/// path when read on macOS or Linux.
-let private baseName (path: string) =
-    path.Substring(path.LastIndexOfAny([| '/'; '\\' |]) + 1)
+/// A path's non-empty parts between `/` and `\`, on every OS. `Path.GetFileName`
+/// splits on `\` only on Windows, so a report written on Windows would otherwise
+/// key a file by its whole path when read on macOS or Linux.
+let private segments (path: string) =
+    path.Split([| '/'; '\\' |], System.StringSplitOptions.RemoveEmptyEntries)
 
-let private toForwardSlashes (path: string) = path.Replace('\\', '/')
+/// The directories of `path` the rules see: those below `root` when `root`'s
+/// segments are a prefix of them (ignoring case), otherwise all of them.
+let private directoriesBelow (root: string[]) (path: string[]) =
+    let directories = Array.truncate (path.Length - 1) path
 
-/// The part of `fileName` below `root`, or `fileName` itself when it is not under `root`.
-/// Both are compared with `/` and `\` alike and ignoring case, and the prefix must end on
-/// a separator, so root `/x/re` does not claim `/x/repo/A.fs`.
-let private relativeToRoot (root: string option) (fileName: string) : string =
-    match root with
-    | None -> fileName
-    | Some root ->
-        let prefix = (toForwardSlashes root).TrimEnd('/') + "/"
-        let path = toForwardSlashes fileName
-
-        if path.StartsWith(prefix, ignoringCase) then
-            path.Substring(prefix.Length)
-        else
-            fileName
+    if
+        root.Length > 0
+        && root.Length <= directories.Length
+        && Array.forall2 equalsIgnoringCase root (Array.truncate root.Length directories)
+    then
+        Array.skip root.Length directories
+    else
+        directories
 
 /// `None` when the file is read. The extension is checked first, then each directory
 /// from the root down, so the first rule that matches is the reason reported.
-let private classify (options: ReaderOptions) (fileName: string) : ExclusionReason option =
+let private classify
+    (options: ReaderOptions)
+    (root: string[])
+    (baseName: string)
+    (path: string[])
+    : ExclusionReason option =
     if
         not (
             options.IncludedExtensions
-            |> Array.exists (fun e -> fileName.EndsWith(e, ignoringCase))
+            |> Array.exists (fun e -> baseName.EndsWith(e, ignoringCase))
         )
     then
-        Some(ExcludedByExtension(Path.GetExtension(fileName)))
+        Some(ExcludedByExtension(Path.GetExtension(baseName)))
     else
-        let segments =
-            (relativeToRoot options.Root fileName).Split([| '/'; '\\' |], System.StringSplitOptions.RemoveEmptyEntries)
-
-        segments
-        |> Array.take (segments.Length - 1)
+        directoriesBelow root path
         |> Array.tryPick (fun directory -> options.ExcludedDirectories |> Array.tryFind (matches directory))
         |> Option.map ExcludedByDirectory
 
@@ -207,7 +204,7 @@ type Report =
         Excluded: ExcludedFile list
     }
 
-let private readClassLines (fileName: string) (classEl: XElement) : RawLine list =
+let private readClassLines (baseName: string) (classEl: XElement) : RawLine list =
     let ns = classEl.Name.Namespace
 
     let lines =
@@ -234,7 +231,7 @@ let private readClassLines (fileName: string) (classEl: XElement) : RawLine list
 
                 Some
                     {
-                        FileName = baseName fileName
+                        FileName = baseName
                         LineNum = int numAttr.Value
                         WasHit = int hitsAttr.Value > 0
                         BrCovered = brCovered
@@ -246,7 +243,7 @@ let private readClassLines (fileName: string) (classEl: XElement) : RawLine list
         // Placeholder so a zero-line class still appears (as 100%); buildCoverage drops LineNum -1.
         [
             {
-                FileName = baseName fileName
+                FileName = baseName
                 LineNum = -1
                 WasHit = false
                 BrCovered = 0
@@ -259,6 +256,8 @@ let private readClassLines (fileName: string) (classEl: XElement) : RawLine list
 /// Read Cobertura XML reports in one pass, classifying each `<class>` once.
 /// Exclusions are deduplicated by base name and sorted.
 let readReports (options: ReaderOptions) (xmlContents: string list) : Report =
+    let root = options.Root |> Option.map segments |> Option.defaultValue [||]
+
     let lines, excluded =
         xmlContents
         |> List.collect (fun xml ->
@@ -267,17 +266,14 @@ let readReports (options: ReaderOptions) (xmlContents: string list) : Report =
             doc.Root.Descendants(doc.Root.Name.Namespace + "class")
             |> Seq.choose (fun classEl ->
                 let fn = classEl.Attribute(XName.Get("filename"))
-                if isNull fn then None else Some(fn.Value, classEl))
+                if isNull fn then None else Some(segments fn.Value, classEl))
             |> Seq.toList)
-        |> List.partitionWith (fun (fileName, classEl) ->
-            match classify options fileName with
-            | None -> Choice1Of2(readClassLines fileName classEl)
-            | Some reason ->
-                Choice2Of2
-                    {
-                        FileName = baseName fileName
-                        Reason = reason
-                    })
+        |> List.partitionWith (fun (path, classEl) ->
+            let baseName = Array.tryLast path |> Option.defaultValue ""
+
+            match classify options root baseName path with
+            | None -> Choice1Of2(readClassLines baseName classEl)
+            | Some reason -> Choice2Of2 { FileName = baseName; Reason = reason })
 
     {
         Lines = List.concat lines

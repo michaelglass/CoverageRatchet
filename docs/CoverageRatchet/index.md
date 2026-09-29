@@ -135,7 +135,7 @@ coverageratchet loosen --file TestRunner.fs
 
 Naming a file the report did not measure writes nothing and exits 2; otherwise `loosen` exits 0.
 
-Neither `ratchet` nor `loosen` rewrites a `reason`. When either one moves a floor that has a reason, it names the floor so you can reread the prose:
+`ratchet`, `loosen` and `baseline-lines` never rewrite a `reason`. When one of them moves a floor that has a reason, it names the floor so you can reread the prose:
 
 ```
 Warning: Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number
