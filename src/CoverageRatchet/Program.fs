@@ -884,25 +884,11 @@ Use in CI. Files not listed in [config] must hit 100%/100%.
     | [ "loosen" ] ->
         Some
             """
-Lower the floors of the files that FAIL 'check' to their current
-coverage, so 'check' passes. Use sparingly — bootstrapping, or after a
-deliberate drop. Unlike 'ratchet' this can move thresholds DOWN.
+Lower the floors of the files that FAIL 'check' to their current coverage,
+moving only the failing number; every passing file's entry is left as it is.
+It moves floors DOWN, so use it sparingly. Percentage floors only.
 
-Only failing files change, and only the failing number moves: a file
-without a floor gets one ("loosened automatically"), a file with one has
-it lowered. Every passing file's entry is left exactly as it is on disk,
-reason included — even one set below its current coverage on purpose,
-say a Linux value. Tightening is 'ratchet's job.
-
-Limit the write to named files with --file <name> (repeatable):
-
-  coverageratchet loosen ratchet.json --file Foo.fs
-
-Naming a file the report did not measure writes nothing and exits 2.
-
-Applies to PERCENTAGE floors only. The covered-line count floors live
-in the separate "countFloors" section; re-baseline those with
-'baseline-lines'.
+  coverageratchet loosen ratchet.json --file Foo.fs   # loosen only Foo.fs
 """
     | [ "baseline-lines" ] ->
         Some
