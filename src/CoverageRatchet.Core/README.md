@@ -310,6 +310,8 @@ let newRaw: RawConfig = baselineCountFloorsRaw raw files
 
 `loosen` sets every file's threshold to its current actual coverage, adding new overrides for files below 100% with `reason = "loosened automatically"`.
 
+Neither rewrites a `reason`. `reasonWarnings before after` lists each floor (percentage or count) that moved between two `RawConfig`s and has a reason, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`; the CLI prints them after `ratchet` and `loosen`.
+
 `ratchetCountFloors` is monotonic and **never enrols new files** — an impact-filtered partial run must not be able to write a floor from coverage that never ran. `baselineCountFloors` records current counts for every observed file and *may lower* a floor; it is both the bootstrap and the deliberate re-baseline after removing covered code, and it preserves any recorded `reason`.
 
 `loosen`, `loosenRaw` and `mergeFromCi` operate on **percentage** floors only. There is deliberately no automatic lowering path for count floors: lowering one is the human decision that `baselineCountFloors` exists to record.

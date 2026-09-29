@@ -315,6 +315,64 @@ let loosenRaw (raw: RawConfig) (files: FileCoverage list) : RawConfig =
     let loosened = loosen resolved files
     mergeRawOverrides raw resolved loosened
 
+/// One line per floor that moved between `before` and `after` and carries a
+/// `reason`, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`.
+///
+/// `ratchet` and `loosen` keep reasons as written: only a person can tell whether a
+/// number in the prose is the floor. So they say which reasons to reread instead.
+/// An entry is matched by file and platform; one that was added or removed is not a
+/// moved floor.
+let reasonWarnings (before: RawConfig) (after: RawConfig) : string list =
+    let moved
+        (platformOf: 'a -> Platform option)
+        (reasonOf: 'a -> string option)
+        (changes: 'a -> 'a -> (string * float * float) list)
+        (beforeSection: Map<string, 'a list>)
+        (afterSection: Map<string, 'a list>)
+        =
+        let warning name (old: 'a) (updated: 'a) =
+            match changes old updated |> List.filter (fun (_, a, b) -> a <> b) with
+            | [] -> None
+            | moves ->
+                let label =
+                    match platformOf old with
+                    | Some p -> sprintf "%s (%s)" name (Platform.toString p)
+                    | None -> name
+
+                let described =
+                    moves
+                    |> List.map (fun (field, a, b) -> sprintf "%s %g -> %g" field a b)
+                    |> String.concat ", "
+
+                Some(sprintf "%s: %s; its reason may quote the old number" label described)
+
+        beforeSection
+        |> Map.toList
+        |> List.collect (fun (name, entries) ->
+            entries
+            |> List.filter (fun old -> (reasonOf old).IsSome)
+            |> List.choose (fun old ->
+                Map.tryFind name afterSection
+                |> Option.bind (List.tryFind (fun e -> platformOf e = platformOf old))
+                |> Option.bind (warning name old)))
+
+    let overrideChanges (a: Override) (b: Override) =
+        [ "line", a.Line, b.Line; "branch", a.Branch, b.Branch ]
+
+    let countChanges (a: CountFloor) (b: CountFloor) =
+        [
+            "coveredLines", float a.CoveredLines, float b.CoveredLines
+            "coveredBranches", float a.CoveredBranches, float b.CoveredBranches
+        ]
+
+    moved (fun (o: Override) -> o.Platform) (fun o -> o.Reason) overrideChanges before.RawOverrides after.RawOverrides
+    @ moved
+        (fun (f: CountFloor) -> f.Platform)
+        (fun f -> f.Reason)
+        countChanges
+        before.RawCountFloors
+        after.RawCountFloors
+
 let mergeFromCi (raw: RawConfig) (ciPlatform: Platform) (ciResults: Map<string, CiFileResult>) : RawConfig =
     let mutable result = raw.RawOverrides
 

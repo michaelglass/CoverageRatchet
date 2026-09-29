@@ -472,6 +472,94 @@ let ``run - ratchet with new file in coverage only counts existing overrides as 
 
         test <@ result = Ok 2 @>)
 
+let private configWithFooFloor (configPath: string) (line: float) (reason: string option) =
+    saveConfig
+        configPath
+        { defaultsConfig with
+            Overrides =
+                Map.ofList
+                    [
+                        "Foo.fs",
+                        {
+                            Line = line
+                            Branch = 100.0
+                            Reason = reason
+                            Platform = None
+                        }
+                    ]
+        }
+
+[<Fact>]
+let ``run - ratchet warns when it moves a floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 (Some "floor 30 is the measured value")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 1 @>
+        test <@ output.Contains("Warning: Foo.fs: line 30 -> 50; its reason may quote the old number") @>
+        test <@ File.ReadAllText(configPath).Contains("floor 30 is the measured value") @>)
+
+[<Fact>]
+let ``run - ratchet is quiet about a moved floor without a reason, and when nothing moved`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 None
+
+        let movedOutput, movedResult =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        let otherDir = Path.Combine(tmpDir, "unmoved")
+        Directory.CreateDirectory(otherDir) |> ignore
+        File.WriteAllText(Path.Combine(otherDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let otherConfig = Path.Combine(otherDir, "config.json")
+        configWithFooFloor otherConfig 50.0 (Some "floor 50")
+
+        let unmovedOutput, unmovedResult =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some otherConfig)) otherDir false)
+
+        test <@ movedResult = Ok 1 @>
+        test <@ not (movedOutput.Contains("Warning")) @>
+        test <@ unmovedResult = Ok 0 @>
+        test <@ not (unmovedOutput.Contains("Warning")) @>)
+
+[<Fact>]
+let ``run - ratchet that fails still warns about a moved floor with a reason`` () =
+    withTempDir (fun tmpDir ->
+        let xml =
+            (makeCoverageXml 50)
+                .Replace(
+                    "</classes>",
+                    """<class filename="/src/Bar.fs"><lines><line number="1" hits="0" /></lines></class></classes>"""
+                )
+
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), xml)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 (Some "floor 30")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 2 @>
+        test <@ output.Contains("Warning: Foo.fs: line 30 -> 50; its reason may quote the old number") @>)
+
+[<Fact>]
+let ``run - loosen warns when it moves a floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 70.0 (Some "floor 70")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Loosen(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ output.Contains("Warning: Foo.fs: line 70 -> 50; its reason may quote the old number") @>)
+
 [<Fact>]
 let ``run - check-json writes platform and file results to output file`` () =
     withTempDir (fun tmpDir ->

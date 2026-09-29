@@ -127,6 +127,12 @@ coverageratchet loosen
 
 This always exits 0. Files that were already at 100% don't get an override. New overrides get the reason `"loosened automatically"`.
 
+Neither `ratchet` nor `loosen` rewrites a `reason`. When either one moves a floor that has a reason, it names the floor so you can reread the prose:
+
+```
+Warning: Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number
+```
+
 ### Show improvement targets
 
 ```bash

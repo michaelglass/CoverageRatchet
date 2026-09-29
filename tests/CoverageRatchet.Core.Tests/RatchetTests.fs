@@ -556,3 +556,133 @@ let ``baselineCountFloorsRaw on a file with no floor at all still writes it plat
     let result = baselineCountFloorsRaw raw [ makeFileWithCounts "Foo.fs" 55 60 5 6 ]
 
     test <@ result.RawCountFloors.["Foo.fs"] = [ countFloor 55 5 ] @>
+
+// --- reasonWarnings ---
+
+let private ovr line branch reason platform : Override =
+    {
+        Line = line
+        Branch = branch
+        Reason = reason
+        Platform = platform
+    }
+
+let private rawWith
+    (overrides: (string * Override list) list)
+    (countFloors: (string * CountFloor list) list)
+    : RawConfig =
+    {
+        DefaultLine = 100.0
+        DefaultBranch = 100.0
+        RawOverrides = Map.ofList overrides
+        RawCountFloors = Map.ofList countFloors
+    }
+
+[<Fact>]
+let ``reasonWarnings - a moved floor with a reason names the file and old -> new`` () =
+    let before =
+        rawWith [ "Thresholds.fs", [ ovr 97.0 91.0 (Some "Branch floor 91") (Some MacOS) ] ] []
+
+    let after =
+        rawWith [ "Thresholds.fs", [ ovr 97.0 90.0 (Some "Branch floor 91") (Some MacOS) ] ] []
+
+    test
+        <@
+            reasonWarnings before after =
+                [
+                    "Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number"
+                ]
+        @>
+
+[<Fact>]
+let ``reasonWarnings - names both numbers when both move, for a platform-less entry`` () =
+    let before = rawWith [ "Foo.fs", [ ovr 50.0 40.0 (Some "why") None ] ] []
+    let after = rawWith [ "Foo.fs", [ ovr 60.5 45.0 (Some "why") None ] ] []
+
+    test
+        <@
+            reasonWarnings before after =
+                [
+                    "Foo.fs: line 50 -> 60.5, branch 40 -> 45; its reason may quote the old number"
+                ]
+        @>
+
+[<Fact>]
+let ``reasonWarnings - nothing for a floor without a reason, an unmoved floor, or a removed one`` () =
+    let before =
+        rawWith
+            [
+                "NoReason.fs", [ ovr 50.0 50.0 None None ]
+                "Unmoved.fs", [ ovr 50.0 50.0 (Some "why") None ]
+                "Removed.fs", [ ovr 50.0 50.0 (Some "why") None ]
+            ]
+            []
+
+    let after =
+        rawWith
+            [
+                "NoReason.fs", [ ovr 60.0 60.0 None None ]
+                "Unmoved.fs", [ ovr 50.0 50.0 (Some "why") None ]
+            ]
+            []
+
+    test <@ reasonWarnings before after |> List.isEmpty @>
+
+[<Fact>]
+let ``reasonWarnings - matches entries by platform`` () =
+    let before =
+        rawWith
+            [
+                "Foo.fs",
+                [
+                    ovr 50.0 50.0 (Some "linux") (Some Linux)
+                    ovr 60.0 60.0 (Some "mac") (Some MacOS)
+                ]
+            ]
+            []
+
+    let after =
+        rawWith
+            [
+                "Foo.fs",
+                [
+                    ovr 50.0 50.0 (Some "linux") (Some Linux)
+                    ovr 70.0 60.0 (Some "mac") (Some MacOS)
+                ]
+            ]
+            []
+
+    test <@ reasonWarnings before after = [ "Foo.fs (macos): line 60 -> 70; its reason may quote the old number" ] @>
+
+[<Fact>]
+let ``reasonWarnings - covers count floors too`` () =
+    let floorWith lines reason =
+        { countFloor lines 5 with
+            Reason = reason
+        }
+
+    let before =
+        rawWith
+            []
+            [
+                "Foo.fs", [ floorWith 10 (Some "10 lines") ]
+                "Bar.fs", [ floorWith 10 None ]
+            ]
+
+    let after =
+        rawWith
+            []
+            [
+                "Foo.fs", [ floorWith 12 (Some "10 lines") ]
+                "Bar.fs", [ floorWith 12 None ]
+            ]
+
+    test <@ reasonWarnings before after = [ "Foo.fs: coveredLines 10 -> 12; its reason may quote the old number" ] @>
+
+[<Fact>]
+let ``reasonWarnings - ratchetRaw moving a floor with a reason is reported`` () =
+    let raw = rawWith [ "Foo.fs", [ ovr 30.0 100.0 (Some "was 30") None ] ] []
+    let after = ratchetRaw raw [ makeFile "Foo.fs" 50.0 100.0 0 0 ]
+
+    test <@ reasonWarnings raw after = [ "Foo.fs: line 30 -> 50; its reason may quote the old number" ] @>
+    test <@ after.RawOverrides.["Foo.fs"].[0].Reason = Some "was 30" @>

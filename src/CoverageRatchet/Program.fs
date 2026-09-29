@@ -248,6 +248,11 @@ let private runCheck (configPath: string) (exclusions: ExcludedFile list) (files
 
     exitCodeOf verdict
 
+/// `ratchet` and `loosen` never rewrite a reason, so name each one whose floor moved.
+let private warnAboutReasons (before: RawConfig) (after: RawConfig) =
+    for warning in reasonWarnings before after do
+        printfn "Warning: %s" warning
+
 let private runRatchet (configPath: string) (files: FileCoverage list) =
     let raw = loadRawConfig configPath
     let config = resolveConfig raw
@@ -258,6 +263,7 @@ let private runRatchet (configPath: string) (files: FileCoverage list) =
         0
     | Tightened newRaw ->
         saveRawConfig configPath newRaw
+        warnAboutReasons raw newRaw
         let newConfig = resolveConfig newRaw
 
         let removed = config.Overrides.Count - newConfig.Overrides.Count
@@ -275,6 +281,7 @@ let private runRatchet (configPath: string) (files: FileCoverage list) =
         1
     | Failed(newRaw, failedFiles) ->
         saveRawConfig configPath newRaw
+        warnAboutReasons raw newRaw
         eprintfn "Coverage below threshold for: %s" (String.concat ", " failedFiles)
         2
 
@@ -327,6 +334,7 @@ let private runLoosen (configPath: string) (files: FileCoverage list) =
     let raw = loadRawConfig configPath
     let newRaw = loosenRaw raw files
     saveRawConfig configPath newRaw
+    warnAboutReasons raw newRaw
     printfn "Loosen complete: thresholds set to current coverage"
     0
 
