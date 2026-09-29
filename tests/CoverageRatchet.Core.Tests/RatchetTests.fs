@@ -296,6 +296,68 @@ let ``parseCiThresholds - ignores the excluded list check-json writes`` () =
     test <@ platform = Linux @>
     test <@ results = Map.ofList [ "Foo.fs", { Line = 59.0; Branch = 23.0 } ] @>
 
+let private ciResults: CiResults =
+    {
+        Platform = Linux
+        Results =
+            [
+                "Zeta.fs", { Line = 59.0; Branch = 23.0 }
+                "Alpha.fs", { Line = 100.0; Branch = 100.0 }
+            ]
+        Excluded =
+            [
+                {
+                    File = "Gen.fs"
+                    Reason = "in a directory named \"obj\""
+                }
+            ]
+    }
+
+[<Fact>]
+let ``CiResults.serialize - writes platform, results in order and excluded`` () =
+    test
+        <@
+            CiResults.serialize ciResults =
+                """{
+  "platform": "linux",
+  "results": {
+    "Zeta.fs": {
+      "line": 59,
+      "branch": 23
+    },
+    "Alpha.fs": {
+      "line": 100,
+      "branch": 100
+    }
+  },
+  "excluded": [
+    {
+      "file": "Gen.fs",
+      "reason": "in a directory named \"obj\""
+    }
+  ]
+}"""
+        @>
+
+[<Fact>]
+let ``CiResults.parse - reads what serialize writes`` () =
+    test <@ CiResults.parse (CiResults.serialize ciResults) = ciResults @>
+
+[<Fact>]
+let ``CiResults.parse - a missing excluded list is empty and unknown keys are ignored`` () =
+    let json =
+        """{"platform":"macos","extra":1,"results":{"Foo.fs":{"line":59,"branch":23,"note":"x"}}}"""
+
+    test
+        <@
+            CiResults.parse json =
+                {
+                    Platform = MacOS
+                    Results = [ "Foo.fs", { Line = 59.0; Branch = 23.0 } ]
+                    Excluded = []
+                }
+        @>
+
 [<Fact>]
 let ``parseCiThresholds - empty string raises actionable error`` () =
     let ex = Assert.ThrowsAny<exn>(fun () -> parseCiThresholds "" |> ignore)

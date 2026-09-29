@@ -1,7 +1,9 @@
 module CoverageRatchet.Ratchet
 
 open System
+open System.Collections.Generic
 open System.Text.Json
+open System.Text.Json.Nodes
 open CoverageRatchet.Cobertura
 open CoverageRatchet.Thresholds
 
@@ -493,26 +495,96 @@ let mergeFromCi (raw: RawConfig) (ciPlatform: Platform) (ciResults: Map<string, 
 
     { raw with RawOverrides = result }
 
+/// A file the reader skipped, as `check-json` records it: its base name and the
+/// `ExclusionReason.describe` text.
+type CiExclusion = { File: string; Reason: string }
+
+/// What `check-json` writes for CI to upload: the platform that measured, each
+/// measured file's line and branch percentage rounded down (in report order), and
+/// the files the reader skipped.
+type CiResults =
+    {
+        Platform: Platform
+        Results: (string * CiFileResult) list
+        Excluded: CiExclusion list
+    }
+
+module CiResults =
+    /// `{"platform": "linux", "results": {"File.fs": {"line": 59, "branch": 23}}, "excluded": [{"file": "Gen.fs", "reason": "..."}]}`
+    let serialize (ci: CiResults) : string =
+        let results = JsonObject()
+
+        for name, result in ci.Results do
+            results.[name] <-
+                JsonObject(
+                    [
+                        KeyValuePair("line", JsonValue.Create(result.Line) :> JsonNode)
+                        KeyValuePair("branch", JsonValue.Create(result.Branch) :> JsonNode)
+                    ]
+                )
+
+        let excluded = JsonArray()
+
+        for e in ci.Excluded do
+            excluded.Add(
+                JsonObject(
+                    [
+                        KeyValuePair("file", JsonValue.Create(e.File) :> JsonNode)
+                        KeyValuePair("reason", JsonValue.Create(e.Reason) :> JsonNode)
+                    ]
+                )
+            )
+
+        let root = JsonObject()
+        root.["platform"] <- JsonValue.Create(Platform.toString ci.Platform)
+        root.["results"] <- results
+        root.["excluded"] <- excluded
+        root.ToJsonString(jsonOptions)
+
+    /// Read what `serialize` writes. An unknown platform reads as `Platform.current`,
+    /// a missing `excluded` as none, and unknown keys are ignored.
+    let parse (json: string) : CiResults =
+        if String.IsNullOrWhiteSpace(json) then
+            failwith
+                "CI thresholds JSON is empty. Expected a coverage-thresholds artifact with shape \
+                 {\"platform\":\"linux|macos|windows\",\"results\":{\"File.fs\":{\"line\":N,\"branch\":N}}}."
+
+        use doc = JsonDocument.Parse(json)
+        let root = doc.RootElement
+
+        let platform =
+            Platform.ofString (root.GetProperty("platform").GetString())
+            |> Option.defaultValue Platform.current
+
+        let results =
+            root.GetProperty("results").EnumerateObject()
+            |> Seq.map (fun prop ->
+                prop.Name,
+                {
+                    Line = prop.Value.GetProperty("line").GetDouble()
+                    Branch = prop.Value.GetProperty("branch").GetDouble()
+                })
+            |> Seq.toList
+
+        let excluded =
+            match root.TryGetProperty("excluded") with
+            | true, list when list.ValueKind = JsonValueKind.Array ->
+                list.EnumerateArray()
+                |> Seq.map (fun e ->
+                    {
+                        File = e.GetProperty("file").GetString()
+                        Reason = e.GetProperty("reason").GetString()
+                    })
+                |> Seq.toList
+            | _ -> []
+
+        {
+            Platform = platform
+            Results = results
+            Excluded = excluded
+        }
+
+/// The platform and per-file results of a `check-json` artifact.
 let parseCiThresholds (json: string) : Platform * Map<string, CiFileResult> =
-    if String.IsNullOrWhiteSpace(json) then
-        failwith
-            "CI thresholds JSON is empty. Expected a coverage-thresholds artifact with shape \
-             {\"platform\":\"linux|macos|windows\",\"results\":{\"File.fs\":{\"line\":N,\"branch\":N}}}."
-
-    use doc = JsonDocument.Parse(json)
-    let root = doc.RootElement
-    let platformStr = root.GetProperty("platform").GetString()
-
-    let platform = Platform.ofString platformStr |> Option.defaultValue Platform.current
-
-    let resultsEl = root.GetProperty("results")
-
-    let results =
-        resultsEl.EnumerateObject()
-        |> Seq.map (fun prop ->
-            let line = prop.Value.GetProperty("line").GetDouble()
-            let branch = prop.Value.GetProperty("branch").GetDouble()
-            prop.Name, { Line = line; Branch = branch })
-        |> Map.ofSeq
-
-    platform, results
+    let ci = CiResults.parse json
+    ci.Platform, Map.ofList ci.Results

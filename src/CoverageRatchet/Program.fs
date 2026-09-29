@@ -362,31 +362,28 @@ let private runCheckJson
     (files: FileCoverage list)
     =
     let config = loadConfig configPath
-    let allResults = buildFileResults config files
 
-    let resultsDict = System.Collections.Generic.Dictionary<string, obj>()
+    let ci: CiResults =
+        {
+            Platform = Platform.current
+            Results =
+                buildFileResults config files
+                |> List.map (fun r ->
+                    r.File.FileName,
+                    {
+                        Line = floor r.File.LinePct
+                        Branch = floor r.File.BranchPct
+                    })
+            Excluded =
+                exclusions
+                |> List.map (fun e ->
+                    {
+                        File = e.FileName
+                        Reason = ExclusionReason.describe e.Reason
+                    })
+        }
 
-    for r in allResults do
-        let entry = System.Collections.Generic.Dictionary<string, obj>()
-        entry.["line"] <- int (floor r.File.LinePct)
-        entry.["branch"] <- int (floor r.File.BranchPct)
-        resultsDict.[r.File.FileName] <- entry
-
-    let wrapper = System.Collections.Generic.Dictionary<string, obj>()
-    wrapper.["platform"] <- Platform.toString Platform.current
-    wrapper.["results"] <- resultsDict
-
-    wrapper.["excluded"] <-
-        exclusions
-        |> List.map (fun e ->
-            let entry = System.Collections.Generic.Dictionary<string, obj>()
-            entry.["file"] <- e.FileName
-            entry.["reason"] <- ExclusionReason.describe e.Reason
-            entry)
-        |> List.toArray
-
-    let json = JsonSerializer.Serialize(wrapper, jsonOptions)
-    File.WriteAllText(outputPath, json)
+    File.WriteAllText(outputPath, CiResults.serialize ci)
 
     let verdict = judge config files
 
