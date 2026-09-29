@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat!: `ReaderOptions` gains `Root: string option`. When it is set and a file's path lies under it (ignoring case, `/` and `\` alike), the directory rules see only the directories below it, so a checkout under a directory named `tests`, `test` or `obj` is read. `ReaderOptions.defaults` has `Root = None`, which keeps matching the whole path; a record built field by field must now give `Root`.
+
 ## 0.1.0-alpha.12 - 2026-09-29
 
 - chore: CoverageRatchet.Core now lives in its own repository, [github.com/michaelglass/CoverageRatchet](https://github.com/michaelglass/CoverageRatchet), split out of MichaelsWackyFsPackageTools with its history and release tags. The package id and its API are unchanged.

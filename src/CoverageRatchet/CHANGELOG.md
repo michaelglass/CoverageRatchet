@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix: the reader's directory rules now apply only below the config file's directory, so a checkout that itself sits under a directory named `tests`, `test` or `obj` is measured instead of reading nothing (`check` used to exit 2). A report path outside that directory is still matched in full.
+
 ## 0.15.0-alpha.19 - 2026-09-29
 
 - chore: CoverageRatchet now lives in its own repository, [github.com/michaelglass/CoverageRatchet](https://github.com/michaelglass/CoverageRatchet), split out of MichaelsWackyFsPackageTools with its history and release tags. The package id and the `coverageratchet` command are unchanged.

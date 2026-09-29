@@ -75,7 +75,7 @@ By default the reader reads every `.fs`, `.cs` and `.vb` file, and skips a file 
 
 Every comparison ignores case, and a file's own name never matters: a production `TestKit.fs` is read. Scripts (`.fsx`, `.csx`) are not read because they are not compiled into an assembly under test; signature files (`.fsi`) hold no executable lines.
 
-The rules see the path exactly as the report records it. `dotnet test --coverage` records absolute paths, so the directories above your checkout count too: a checkout under a directory named `tests` reads nothing, which the CLI reports as nothing measured (exit 2) and `targets` explains.
+`dotnet test --coverage` records absolute paths. `ReaderOptions.Root` keeps the directories above your checkout out of it: when a file's path lies under `Root`, the rules see only the directories below `Root`. The CLI sets `Root` to the directory of its config file, so a checkout under a directory named `tests` is still measured. With `Root = None` (the default), or for a path outside `Root`, the rules see the path exactly as the report records it, directories above the checkout included.
 
 Test-support code compiled into a library that is not itself a test project (a shared `Tests.Common`, say) reaches the report from wherever it lives. Keep it out of every consumer of the report at once with an assembly-level attribute in that project:
 
@@ -109,6 +109,7 @@ let defaults =
                 Named "node_modules"
                 Named ".fable"
             |]
+        Root = None
     }
 ```
 <!-- sync:reader-defaults:end -->
@@ -129,13 +130,20 @@ type DirectoryRule =
 /// Which `<class>` elements of a Cobertura report the reader reads.
 ///
 /// A file is read when its name ends with one of `IncludedExtensions` and no directory
-/// in its path matches one of `ExcludedDirectories`, both ignoring case. The rules see
-/// the path exactly as the report records it, which for an absolute path includes the
-/// directories above the checkout.
+/// in its path matches one of `ExcludedDirectories`, both ignoring case.
+///
+/// When `Root` is set and the path lies under it, the directory rules see only the
+/// directories below `Root`, so a checkout under e.g. `~/work/tests/` is still read.
+/// A path outside `Root`, or any path when `Root` is `None`, is matched as the report
+/// records it, which for an absolute path includes the directories above the checkout.
+/// `Root` is compared as a string (ignoring case, `/` and `\` alike); the filesystem is
+/// never consulted.
 type ReaderOptions =
     {
         IncludedExtensions: string[]
         ExcludedDirectories: DirectoryRule[]
+        /// The directory the rules are relative to; the CLI passes its config file's directory.
+        Root: string option
     }
 ```
 <!-- sync:reader-options:end -->
