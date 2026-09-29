@@ -26,6 +26,7 @@ jobs:
     if: "!contains(github.ref, '-alpha') && !contains(github.ref, '-beta') && !contains(github.ref, '-rc')"
     uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-docs.yml@main
     with:
+      dotnet-version: '10.0.4xx'
       fsdocs-parameters: "--parameters root /CoverageRatchet/"
     permissions:
       contents: read

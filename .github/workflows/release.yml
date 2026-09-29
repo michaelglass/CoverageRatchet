@@ -14,6 +14,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/coverageratchet-v')
     uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-release.yml@main
     with:
+      dotnet-version: '10.0.4xx'
       package-name: CoverageRatchet
       tag-prefix: coverageratchet-v
       fsproj-path: src/CoverageRatchet/CoverageRatchet.fsproj
@@ -53,6 +54,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/coverageratchet-core-v')
     uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-release.yml@main
     with:
+      dotnet-version: '10.0.4xx'
       package-name: CoverageRatchet.Core
       tag-prefix: coverageratchet-core-v
       fsproj-path: src/CoverageRatchet.Core/CoverageRatchet.Core.fsproj
