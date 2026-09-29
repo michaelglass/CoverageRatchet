@@ -472,6 +472,94 @@ let ``run - ratchet with new file in coverage only counts existing overrides as 
 
         test <@ result = Ok 2 @>)
 
+let private configWithFooFloor (configPath: string) (line: float) (reason: string option) =
+    saveConfig
+        configPath
+        { defaultsConfig with
+            Overrides =
+                Map.ofList
+                    [
+                        "Foo.fs",
+                        {
+                            Line = line
+                            Branch = 100.0
+                            Reason = reason
+                            Platform = None
+                        }
+                    ]
+        }
+
+[<Fact>]
+let ``run - ratchet warns when it moves a floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 (Some "floor 30 is the measured value")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 1 @>
+        test <@ output.Contains("Warning: Foo.fs: line 30 -> 50; its reason may quote the old number") @>
+        test <@ File.ReadAllText(configPath).Contains("floor 30 is the measured value") @>)
+
+[<Fact>]
+let ``run - ratchet is quiet about a moved floor without a reason, and when nothing moved`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 None
+
+        let movedOutput, movedResult =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        let otherDir = Path.Combine(tmpDir, "unmoved")
+        Directory.CreateDirectory(otherDir) |> ignore
+        File.WriteAllText(Path.Combine(otherDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let otherConfig = Path.Combine(otherDir, "config.json")
+        configWithFooFloor otherConfig 50.0 (Some "floor 50")
+
+        let unmovedOutput, unmovedResult =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some otherConfig)) otherDir false)
+
+        test <@ movedResult = Ok 1 @>
+        test <@ not (movedOutput.Contains("Warning")) @>
+        test <@ unmovedResult = Ok 0 @>
+        test <@ not (unmovedOutput.Contains("Warning")) @>)
+
+[<Fact>]
+let ``run - ratchet that fails still warns about a moved floor with a reason`` () =
+    withTempDir (fun tmpDir ->
+        let xml =
+            (makeCoverageXml 50)
+                .Replace(
+                    "</classes>",
+                    """<class filename="/src/Bar.fs"><lines><line number="1" hits="0" /></lines></class></classes>"""
+                )
+
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), xml)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 30.0 (Some "floor 30")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Ratchet(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 2 @>
+        test <@ output.Contains("Warning: Foo.fs: line 30 -> 50; its reason may quote the old number") @>)
+
+[<Fact>]
+let ``run - loosen warns when it moves a floor that has a reason`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 50)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        configWithFooFloor configPath 70.0 (Some "floor 70")
+
+        let output, result =
+            withCapturedConsole (fun () -> run (Loosen(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ output.Contains("Warning: Foo.fs: line 70 -> 50; its reason may quote the old number") @>)
+
 [<Fact>]
 let ``run - check-json writes platform and file results to output file`` () =
     withTempDir (fun tmpDir ->
@@ -502,6 +590,52 @@ let ``run - check-json writes platform and file results to output file`` () =
         let fooBranch = results.GetProperty("Foo.fs").GetProperty("branch").GetInt32()
         test <@ fooLine = 50 @>
         test <@ fooBranch = 100 @>)
+
+[<Fact>]
+let ``run - check-json lists the files the reader skipped, with the check exit code`` () =
+    withTempDir (fun tmpDir ->
+        let xml =
+            """<?xml version="1.0"?><coverage><packages><package><classes>
+<class filename="/repo/src/Foo.fs"><lines><line number="1" hits="1" /></lines></class>
+<class filename="/repo/src/obj/Debug/Foo.AssemblyInfo.fs"><lines><line number="1" hits="0" /></lines></class>
+</classes></package></packages></coverage>"""
+
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), xml)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        let outputPath = Path.Combine(tmpDir, "output.json")
+
+        let checkResult = run (Check(config = Some configPath)) tmpDir false
+
+        let result =
+            run (CheckJson(config = Some configPath, output = Some outputPath)) tmpDir false
+
+        test <@ result = Ok 0 @>
+        test <@ result = checkResult @>
+
+        use doc = JsonDocument.Parse(File.ReadAllText outputPath)
+        let root = doc.RootElement
+
+        let excluded =
+            root.GetProperty("excluded").EnumerateArray()
+            |> Seq.map (fun e -> e.GetProperty("file").GetString(), e.GetProperty("reason").GetString())
+            |> Seq.toList
+
+        test <@ excluded = [ "Foo.AssemblyInfo.fs", "in a directory named \"obj\"" ] @>
+        let hasFoo = root.GetProperty("results").TryGetProperty("Foo.fs") |> fst
+        test <@ hasFoo @>)
+
+[<Fact>]
+let ``run - check-json writes an empty excluded list when nothing was skipped`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 100)
+        let outputPath = Path.Combine(tmpDir, "output.json")
+
+        let result =
+            run (CheckJson(config = Some(Path.Combine(tmpDir, "config.json")), output = Some outputPath)) tmpDir false
+
+        test <@ result = Ok 0 @>
+        use doc = JsonDocument.Parse(File.ReadAllText outputPath)
+        test <@ doc.RootElement.GetProperty("excluded").GetArrayLength() = 0 @>)
 
 [<Fact>]
 let ``run - check-json with passing coverage returns Ok 0`` () =
@@ -1735,6 +1869,47 @@ let ``runLoosenFromCi - CI coverage failure with valid artifact writes config an
         test <@ written.Contains("Foo.fs") @>)
 
 [<Fact>]
+let ``runLoosenFromCi - an artifact with an excluded list merges only its results`` () =
+    let runId = 555444334L
+    let artifactDir = Path.Combine(Path.GetTempPath(), sprintf "coverage-%d" runId)
+    Directory.CreateDirectory(artifactDir) |> ignore
+
+    let thresholdsJson =
+        """{"platform":"linux","results":{"Foo.fs":{"line":59,"branch":23}},"excluded":[{"file":"Gen.fs","reason":"in a directory named \"obj\""}]}"""
+
+    File.WriteAllText(Path.Combine(artifactDir, "coverage-thresholds-default.json"), thresholdsJson)
+
+    Tests.Common.TestHelpers.withTempDir (fun tmpDir ->
+        let configPath = Path.Combine(tmpDir, "coverage-ratchet.json")
+
+        let failedJson =
+            sprintf """[{"status":"completed","conclusion":"failure","databaseId":%d}]""" runId
+
+        let passedJson =
+            """[{"status":"completed","conclusion":"success","databaseId":1}]"""
+
+        let run =
+            fakeRun
+                [
+                    ("jj", "git push", CoverageRatchet.Shell.Success "")
+                    ("jj", "log", CoverageRatchet.Shell.Success "oldsha")
+                    ("gh", "run list", CoverageRatchet.Shell.Success failedJson)
+                    ("gh", "run download", CoverageRatchet.Shell.Success "")
+                    ("jj", "describe", CoverageRatchet.Shell.Success "")
+                    ("jj", "bookmark set main -r @", CoverageRatchet.Shell.Success "")
+                    ("jj", "new", CoverageRatchet.Shell.Success "")
+                    ("jj", "git push --bookmark main", CoverageRatchet.Shell.Success "")
+                    ("jj", "log", CoverageRatchet.Shell.Success "newsha")
+                    ("gh", "run list", CoverageRatchet.Shell.Success passedJson)
+                ]
+
+        let result = runLoosenFromCi run run configPath
+        test <@ result = 0 @>
+        let written = File.ReadAllText configPath
+        test <@ written.Contains("Foo.fs") @>
+        test <@ not (written.Contains("Gen.fs")) @>)
+
+[<Fact>]
 let ``runLoosenFromCi - CI coverage failure with empty artifact returns 1`` () =
     // pollCi builds artifact path as /tmp/coverage-<runId>. Pre-create it so
     // the CiCoverageFailure branch finds an empty directory and reports "no updates".
@@ -2787,3 +2962,116 @@ let ``main - without --merge-baselines no baseline is written`` () =
 
         test <@ main [| "loosen"; configPath; "--search-dir"; tmpDir |] = 0 @>
         test <@ not (File.Exists(Path.Combine(tmpDir, "coverage.baseline.xml"))) @>)
+
+// --- loosen: only failing files change ---
+
+/// Linux.fs is floored at a Linux value below what this run measures, and
+/// DeadCode.fs is at 100% but keeps its floor on purpose: neither may change.
+let private loosenDocument =
+    """{
+  "overrides": {
+    "Linux.fs": {
+      "line": 40,
+      "branch": 30,
+      "reason": "Linux CI value — `macOS` measures \"more\""
+    },
+    "DeadCode.fs": {
+      "line": 90,
+      "branch": 100,
+      "reason": "kept on purpose"
+    },
+    "Lowered.fs": {
+      "line": 90,
+      "branch": 100,
+      "reason": "was 90"
+    }
+  }
+}"""
+
+let private loosenReport =
+    makeCountCoverageXml
+        [
+            "Linux.fs", 8, 10
+            "DeadCode.fs", 10, 10
+            "Lowered.fs", 7, 10
+            "New.fs", 5, 10
+            "Fine.fs", 10, 10
+        ]
+
+let private withLoosenFixture (action: string -> string -> unit) =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), loosenReport)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        File.WriteAllText(configPath, loosenDocument)
+        action tmpDir configPath)
+
+[<Fact>]
+let ``runScoped - loosen lowers and adds floors for failing files and leaves every other byte`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let output, result =
+            withCapturedConsole (fun () -> runScoped [] (Loosen(config = Some configPath)) tmpDir false)
+
+        let expected =
+            loosenDocument
+                .Replace(
+                    "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
+                    "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
+                )
+                .Replace(
+                    "      \"reason\": \"was 90\"\n    }\n",
+                    "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+                )
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = expected @>
+        test <@ output.Contains("Loosen complete: 1 floors added, 1 lowered; passing files left as they were") @>
+        test <@ output.Contains("Warning: Lowered.fs: line 90 -> 70; its reason may quote the old number") @>)
+
+[<Fact>]
+let ``runScoped - loosen then check passes without touching the passing files`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let _ = runScoped [] (Loosen(config = Some configPath)) tmpDir false
+        let config = loadConfig configPath
+
+        test <@ run (Check(config = Some configPath)) tmpDir false = Ok 0 @>
+        test <@ config.Overrides.["Linux.fs"].Line = 40.0 @>
+        test <@ config.Overrides.ContainsKey "DeadCode.fs" @>
+        test <@ not (config.Overrides.ContainsKey "Fine.fs") @>)
+
+[<Fact>]
+let ``runScoped - loosen --file changes only the named failing file`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let result = runScoped [ "New.fs" ] (Loosen(config = Some configPath)) tmpDir false
+
+        let expected =
+            loosenDocument.Replace(
+                "      \"reason\": \"was 90\"\n    }\n",
+                "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+            )
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = expected @>)
+
+[<Fact>]
+let ``runScoped - loosen --file on a passing file changes nothing`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let output, result =
+            withCapturedConsole (fun () ->
+                runScoped [ "Linux.fs"; "DeadCode.fs" ] (Loosen(config = Some configPath)) tmpDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ File.ReadAllText(configPath) = loosenDocument @>
+        test <@ output.Contains("Loosen complete: 0 floors added, 0 lowered") @>)
+
+[<Fact>]
+let ``runScoped - loosen --file names a file the report did not measure and refuses`` () =
+    withLoosenFixture (fun tmpDir configPath ->
+        let result =
+            runScoped [ "New.fs"; "Missing.fs" ] (Loosen(config = Some configPath)) tmpDir false
+
+        test <@ result = Ok 2 @>
+        test <@ File.ReadAllText(configPath) = loosenDocument @>)
+
+[<Fact>]
+let ``--file - is accepted by loosen`` () =
+    test <@ parseFileScope [| "loosen"; "--file"; "New.fs" |] = Ok([ "New.fs" ], Loosen None) @>

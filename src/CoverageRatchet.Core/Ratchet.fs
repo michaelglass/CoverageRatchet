@@ -266,54 +266,107 @@ let ratchetRawWithStatus (raw: RawConfig) (files: FileCoverage list) : RatchetSt
     else
         NoChanges
 
+/// Lower the floors of the files in `files` that fail them, to their current
+/// coverage, and leave every other entry exactly as it is.
+///
+/// Only a failing number moves, and only down: a file failing its line floor keeps
+/// its branch floor. A failing file without an override gets one, with
+/// `reason = "loosened automatically"`. A passing file is never touched, so a floor
+/// set on purpose (a Linux value, a file at 100% that keeps a floor) survives;
+/// tightening is `ratchet`'s job.
 let loosen (config: Config) (files: FileCoverage list) : Config =
-    let fileMap = files |> List.map (fun f -> f.FileName, f) |> Map.ofList
+    let lowered =
+        buildFileResults config files
+        |> List.filter (fun r -> not (FileResult.passed r))
+        |> List.map (fun r ->
+            let line = min r.LineThreshold (toThreshold r.File.LinePct)
+            let branch = min r.BranchThreshold (toThreshold r.File.BranchPct)
 
-    let updatedOverrides =
-        config.Overrides
-        |> Map.toList
-        |> List.choose (fun (name, ovr) ->
-            match Map.tryFind name fileMap with
-            | None -> Some(name, ovr)
-            | Some file ->
-                if file.LinePct >= config.DefaultLine && file.BranchPct >= config.DefaultBranch then
-                    None
-                else
-                    Some(
-                        name,
-                        { ovr with
-                            Line = toThreshold file.LinePct
-                            Branch = toThreshold file.BranchPct
-                        }
-                    ))
-        |> Map.ofList
+            let updated =
+                match Map.tryFind r.File.FileName config.Overrides with
+                | Some existing ->
+                    { existing with
+                        Line = line
+                        Branch = branch
+                    }
+                | None ->
+                    {
+                        Line = line
+                        Branch = branch
+                        Reason = Some "loosened automatically"
+                        Platform = None
+                    }
 
-    let newOverrides =
-        files
-        |> List.fold
-            (fun acc file ->
-                if Map.containsKey file.FileName acc then
-                    acc
-                elif file.LinePct >= config.DefaultLine && file.BranchPct >= config.DefaultBranch then
-                    acc
-                else
-                    Map.add
-                        file.FileName
-                        {
-                            Line = toThreshold file.LinePct
-                            Branch = toThreshold file.BranchPct
-                            Reason = Some "loosened automatically"
-                            Platform = None
-                        }
-                        acc)
-            updatedOverrides
+            r.File.FileName, updated)
 
-    { config with Overrides = newOverrides }
+    { config with
+        Overrides =
+            lowered
+            |> List.fold (fun acc (name, ovr) -> Map.add name ovr acc) config.Overrides
+    }
 
 let loosenRaw (raw: RawConfig) (files: FileCoverage list) : RawConfig =
     let resolved = resolveConfig raw
     let loosened = loosen resolved files
     mergeRawOverrides raw resolved loosened
+
+/// One line per floor that moved between `before` and `after` and carries a
+/// `reason`, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`.
+///
+/// `ratchet` and `loosen` keep reasons as written: only a person can tell whether a
+/// number in the prose is the floor. So they say which reasons to reread instead.
+/// An entry is matched by file and platform; one that was added or removed is not a
+/// moved floor.
+let reasonWarnings (before: RawConfig) (after: RawConfig) : string list =
+    let moved
+        (platformOf: 'a -> Platform option)
+        (reasonOf: 'a -> string option)
+        (changes: 'a -> 'a -> (string * float * float) list)
+        (beforeSection: Map<string, 'a list>)
+        (afterSection: Map<string, 'a list>)
+        =
+        let warning name (old: 'a) (updated: 'a) =
+            match changes old updated |> List.filter (fun (_, a, b) -> a <> b) with
+            | [] -> None
+            | moves ->
+                let label =
+                    match platformOf old with
+                    | Some p -> sprintf "%s (%s)" name (Platform.toString p)
+                    | None -> name
+
+                let described =
+                    moves
+                    |> List.map (fun (field, a, b) -> sprintf "%s %g -> %g" field a b)
+                    |> String.concat ", "
+
+                Some(sprintf "%s: %s; its reason may quote the old number" label described)
+
+        beforeSection
+        |> Map.toList
+        |> List.collect (fun (name, entries) ->
+            entries
+            |> List.filter (fun old -> (reasonOf old).IsSome)
+            |> List.choose (fun old ->
+                Map.tryFind name afterSection
+                |> Option.bind (List.tryFind (fun e -> platformOf e = platformOf old))
+                |> Option.bind (warning name old)))
+
+    let overrideChanges (a: Override) (b: Override) =
+        [ "line", a.Line, b.Line; "branch", a.Branch, b.Branch ]
+
+    let countChanges (a: CountFloor) (b: CountFloor) =
+        [
+            "coveredLines", float a.CoveredLines, float b.CoveredLines
+            "coveredBranches", float a.CoveredBranches, float b.CoveredBranches
+        ]
+
+    moved (fun (o: Override) -> o.Platform) (fun o -> o.Reason) overrideChanges before.RawOverrides after.RawOverrides
+    @ moved
+        (fun (f: CountFloor) -> f.Platform)
+        (fun f -> f.Reason)
+        countChanges
+        before.RawCountFloors
+        after.RawCountFloors
 
 let mergeFromCi (raw: RawConfig) (ciPlatform: Platform) (ciResults: Map<string, CiFileResult>) : RawConfig =
     let mutable result = raw.RawOverrides

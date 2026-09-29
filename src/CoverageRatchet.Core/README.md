@@ -289,7 +289,7 @@ match ratchetWithStatus config files with
 let newRaw: RawConfig = ratchetRaw raw files
 let status: RatchetStatus = ratchetRawWithStatus raw files
 
-// Loosen: set thresholds to current actual coverage
+// Loosen: lower failing files' floors to current coverage
 let newConfig: Config = loosen config files
 let newRaw: RawConfig = loosenRaw raw files
 
@@ -308,7 +308,9 @@ let newRaw: RawConfig = baselineCountFloorsRaw raw files
 
 `ratchet` floors fractional coverage percentages (e.g. 80.7% → threshold 80.0) so thresholds are stable integers. It never introduces new overrides — only tightens or removes existing ones as coverage improves.
 
-`loosen` sets every file's threshold to its current actual coverage, adding new overrides for files below 100% with `reason = "loosened automatically"`.
+`loosen` lowers the floor of each file in `files` that fails it to its current coverage (rounded down), and moves only the failing number. A failing file without an override gets one with `reason = "loosened automatically"`. A passing file's override is never changed or removed, so run `loosen` on the files you want loosened and leave tightening to `ratchet`.
+
+Neither rewrites a `reason`. `reasonWarnings before after` lists each floor (percentage or count) that moved between two `RawConfig`s and has a reason, e.g. `Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number`; the CLI prints them after `ratchet` and `loosen`.
 
 `ratchetCountFloors` is monotonic and **never enrols new files** — an impact-filtered partial run must not be able to write a floor from coverage that never ran. `baselineCountFloors` records current counts for every observed file and *may lower* a floor; it is both the bootstrap and the deliberate re-baseline after removing covered code, and it preserves any recorded `reason`.
 

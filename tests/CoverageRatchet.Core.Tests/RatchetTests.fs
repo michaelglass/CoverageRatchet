@@ -208,7 +208,7 @@ let ``loosen adds override for file below 100 percent with no existing override`
     test <@ result.Overrides.["New.fs"].Reason = Some "loosened automatically" @>
 
 [<Fact>]
-let ``loosen removes override for file at 100 percent`` () =
+let ``loosen keeps the override of a file at 100 percent`` () =
     let config =
         { defaultsConfig with
             Overrides =
@@ -227,7 +227,8 @@ let ``loosen removes override for file at 100 percent`` () =
     let files = [ makeFile "Foo.fs" 100.0 100.0 4 4 ]
     let result = loosen config files
 
-    test <@ result.Overrides.ContainsKey("Foo.fs") = false @>
+    // Tightening or dropping a passing file's floor is ratchet's job.
+    test <@ result = config @>
 
 [<Fact>]
 let ``ratchetRaw updates non-platform entry when no platform-specific entries exist`` () =
@@ -285,6 +286,15 @@ let ``parseCiThresholds - parses minimal JSON format`` () =
     let platform, results = parseCiThresholds json
     test <@ platform = Linux @>
     test <@ results.["Foo.fs"] = { Line = 59.0; Branch = 23.0 } @>
+
+[<Fact>]
+let ``parseCiThresholds - ignores the excluded list check-json writes`` () =
+    let json =
+        """{"platform":"linux","results":{"Foo.fs":{"line":59,"branch":23}},"excluded":[{"file":"Gen.fs","reason":"in a directory named \"obj\""}]}"""
+
+    let platform, results = parseCiThresholds json
+    test <@ platform = Linux @>
+    test <@ results = Map.ofList [ "Foo.fs", { Line = 59.0; Branch = 23.0 } ] @>
 
 [<Fact>]
 let ``parseCiThresholds - empty string raises actionable error`` () =
@@ -547,3 +557,224 @@ let ``baselineCountFloorsRaw on a file with no floor at all still writes it plat
     let result = baselineCountFloorsRaw raw [ makeFileWithCounts "Foo.fs" 55 60 5 6 ]
 
     test <@ result.RawCountFloors.["Foo.fs"] = [ countFloor 55 5 ] @>
+
+// --- reasonWarnings ---
+
+let private ovr line branch reason platform : Override =
+    {
+        Line = line
+        Branch = branch
+        Reason = reason
+        Platform = platform
+    }
+
+let private rawWith
+    (overrides: (string * Override list) list)
+    (countFloors: (string * CountFloor list) list)
+    : RawConfig =
+    {
+        DefaultLine = 100.0
+        DefaultBranch = 100.0
+        RawOverrides = Map.ofList overrides
+        RawCountFloors = Map.ofList countFloors
+    }
+
+[<Fact>]
+let ``reasonWarnings - a moved floor with a reason names the file and old -> new`` () =
+    let before =
+        rawWith [ "Thresholds.fs", [ ovr 97.0 91.0 (Some "Branch floor 91") (Some MacOS) ] ] []
+
+    let after =
+        rawWith [ "Thresholds.fs", [ ovr 97.0 90.0 (Some "Branch floor 91") (Some MacOS) ] ] []
+
+    test
+        <@
+            reasonWarnings before after =
+                [
+                    "Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number"
+                ]
+        @>
+
+[<Fact>]
+let ``reasonWarnings - names both numbers when both move, for a platform-less entry`` () =
+    let before = rawWith [ "Foo.fs", [ ovr 50.0 40.0 (Some "why") None ] ] []
+    let after = rawWith [ "Foo.fs", [ ovr 60.5 45.0 (Some "why") None ] ] []
+
+    test
+        <@
+            reasonWarnings before after =
+                [
+                    "Foo.fs: line 50 -> 60.5, branch 40 -> 45; its reason may quote the old number"
+                ]
+        @>
+
+[<Fact>]
+let ``reasonWarnings - nothing for a floor without a reason, an unmoved floor, or a removed one`` () =
+    let before =
+        rawWith
+            [
+                "NoReason.fs", [ ovr 50.0 50.0 None None ]
+                "Unmoved.fs", [ ovr 50.0 50.0 (Some "why") None ]
+                "Removed.fs", [ ovr 50.0 50.0 (Some "why") None ]
+            ]
+            []
+
+    let after =
+        rawWith
+            [
+                "NoReason.fs", [ ovr 60.0 60.0 None None ]
+                "Unmoved.fs", [ ovr 50.0 50.0 (Some "why") None ]
+            ]
+            []
+
+    test <@ reasonWarnings before after |> List.isEmpty @>
+
+[<Fact>]
+let ``reasonWarnings - matches entries by platform`` () =
+    let before =
+        rawWith
+            [
+                "Foo.fs",
+                [
+                    ovr 50.0 50.0 (Some "linux") (Some Linux)
+                    ovr 60.0 60.0 (Some "mac") (Some MacOS)
+                ]
+            ]
+            []
+
+    let after =
+        rawWith
+            [
+                "Foo.fs",
+                [
+                    ovr 50.0 50.0 (Some "linux") (Some Linux)
+                    ovr 70.0 60.0 (Some "mac") (Some MacOS)
+                ]
+            ]
+            []
+
+    test <@ reasonWarnings before after = [ "Foo.fs (macos): line 60 -> 70; its reason may quote the old number" ] @>
+
+[<Fact>]
+let ``reasonWarnings - covers count floors too`` () =
+    let floorWith lines reason =
+        { countFloor lines 5 with
+            Reason = reason
+        }
+
+    let before =
+        rawWith
+            []
+            [
+                "Foo.fs", [ floorWith 10 (Some "10 lines") ]
+                "Bar.fs", [ floorWith 10 None ]
+            ]
+
+    let after =
+        rawWith
+            []
+            [
+                "Foo.fs", [ floorWith 12 (Some "10 lines") ]
+                "Bar.fs", [ floorWith 12 None ]
+            ]
+
+    test <@ reasonWarnings before after = [ "Foo.fs: coveredLines 10 -> 12; its reason may quote the old number" ] @>
+
+[<Fact>]
+let ``reasonWarnings - ratchetRaw moving a floor with a reason is reported`` () =
+    let raw = rawWith [ "Foo.fs", [ ovr 30.0 100.0 (Some "was 30") None ] ] []
+    let after = ratchetRaw raw [ makeFile "Foo.fs" 50.0 100.0 0 0 ]
+
+    test <@ reasonWarnings raw after = [ "Foo.fs: line 30 -> 50; its reason may quote the old number" ] @>
+    test <@ after.RawOverrides.["Foo.fs"].[0].Reason = Some "was 30" @>
+
+// --- loosen: only failing files change ---
+
+[<Fact>]
+let ``loosen leaves a passing file's floor below its coverage as it is`` () =
+    let config =
+        { defaultsConfig with
+            Overrides =
+                Map.ofList
+                    [
+                        "Linux.fs",
+                        {
+                            Line = 40.0
+                            Branch = 30.0
+                            Reason = Some "Linux CI value"
+                            Platform = None
+                        }
+                    ]
+        }
+
+    test <@ loosen config [ makeFile "Linux.fs" 80.0 90.0 9 10 ] = config @>
+
+[<Fact>]
+let ``loosen lowers only the failing number`` () =
+    let config =
+        { defaultsConfig with
+            Overrides =
+                Map.ofList
+                    [
+                        "Foo.fs",
+                        {
+                            Line = 80.0
+                            Branch = 90.0
+                            Reason = Some "why"
+                            Platform = None
+                        }
+                    ]
+        }
+
+    let result = loosen config [ makeFile "Foo.fs" 70.0 95.0 19 20 ]
+
+    test
+        <@
+            result.Overrides.["Foo.fs"] =
+                { config.Overrides.["Foo.fs"] with
+                    Line = 70.0
+                }
+        @>
+
+[<Fact>]
+let ``loosen adds a floor for a failing file and none for a passing one`` () =
+    let result =
+        loosen defaultsConfig [ makeFile "New.fs" 50.0 100.0 0 0; makeFile "Fine.fs" 100.0 100.0 0 0 ]
+
+    test <@ result.Overrides |> Map.keys |> Seq.toList = [ "New.fs" ] @>
+    test <@ result.Overrides.["New.fs"].Line = 50.0 @>
+    test <@ result.Overrides.["New.fs"].Branch = 100.0 @>
+
+[<Fact>]
+let ``loosenRaw keeps another platform's entry and adds this platform's for a failing file`` () =
+    let linux: Override =
+        {
+            Line = 40.0
+            Branch = 30.0
+            Reason = Some "Linux CI value"
+            Platform = Some otherPlatform
+        }
+
+    let raw: RawConfig =
+        {
+            DefaultLine = 100.0
+            DefaultBranch = 100.0
+            RawCountFloors = Map.empty
+            RawOverrides = Map.ofList [ "Foo.fs", [ linux ] ]
+        }
+
+    let result = loosenRaw raw [ makeFile "Foo.fs" 60.0 100.0 0 0 ]
+
+    test
+        <@
+            result.RawOverrides.["Foo.fs"] =
+                [
+                    linux
+                    {
+                        Line = 60.0
+                        Branch = 100.0
+                        Reason = Some "loosened automatically"
+                        Platform = Some Platform.current
+                    }
+                ]
+        @>

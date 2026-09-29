@@ -155,6 +155,8 @@ let ``every file below its floor is found across both fixture projects`` () =
             judgeThresholdFile evidence dir "coverage-ratchet.json" (artifactFile "coverage-thresholds-Beta.json")
 
         test <@ alpha.ConfigFound && beta.ConfigFound @>
+        // Beta's artifact also lists a file the reader skipped under "excluded";
+        // propose-from-ci reads only "results", so it is not counted.
         test <@ alpha.FilesMeasured = 3 && beta.FilesMeasured = 2 @>
         test <@ alpha.Shortfalls |> List.map (fun s -> s.File) = [ "Daemon.fs" ] @>
         test <@ beta.Shortfalls |> List.map (fun s -> s.File) = [ "SiteProbes.fs" ] @>

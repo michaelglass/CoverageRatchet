@@ -10,7 +10,7 @@ Per-file code coverage enforcement that only goes up. CoverageRatchet reads your
 2. CoverageRatchet reads the report and compares each file's line and branch coverage against its threshold.
 3. **`check`** fails the build if any file drops below its threshold.
 4. **`ratchet`** (the default command) updates thresholds to match current coverage -- thresholds only go up, not down.
-5. **`loosen`** sets thresholds to whatever coverage is right now, so `check` passes immediately.
+5. **`loosen`** lowers the floors of the files that fail to their current coverage, so `check` passes immediately. Passing files are left alone.
 6. **`baseline-lines`** records each file's current *covered-line count* as a floor (see [Count floors](#count-floors)).
 7. **`targets`** lists files sorted by coverage to find improvement opportunities.
 8. **`gaps`** shows uncovered branch points per file with line numbers.
@@ -96,9 +96,10 @@ build output (`obj`) or vendored code (`paket-files`, `vendor`, `node_modules`,
 `TestKit.fs` is measured. `includedExtensions` in the config narrows the
 languages (see [Source languages](#source-languages)).
 
-The rules see the path the report records, and `dotnet test --coverage`
-records absolute ones: a checkout under a directory named `tests` reads
-nothing, and `check` exits 2.
+`dotnet test --coverage` records absolute paths, so the rules look only at
+the part of each path below the config file's directory: a checkout that
+itself sits under a directory named `tests` is still measured. A path
+outside that directory is matched in full.
 
 A skipped file never gets a floor, so it is missing from both sides of `N/N`.
 `check` says how many were skipped:
@@ -118,13 +119,27 @@ and `targets` names them with the rule that matched:
 
 ### Loosen thresholds
 
-If you need `check` to pass right now (e.g., after a big refactor that dropped coverage), loosen sets every file's threshold to its current actual coverage:
+If you need `check` to pass right now (e.g., after a big refactor that dropped coverage), `loosen` lowers the floor of each file that fails `check` to its current coverage:
 
 ```bash
 coverageratchet loosen
 ```
 
-This always exits 0. Files that were already at 100% don't get an override. New overrides get the reason `"loosened automatically"`.
+Only failing files change, and only the number that fails moves down: a file failing its line floor keeps its branch floor. A failing file without a floor gets one, with the reason `"loosened automatically"`. A passing file's entry is left exactly as it is on disk, reason included, even when it sits below the current coverage on purpose (a Linux value, say) or the file is at 100% and keeps a floor anyway. Tightening is `ratchet`'s job.
+
+To loosen only some files, name them with `--file` (repeatable):
+
+```bash
+coverageratchet loosen --file TestRunner.fs
+```
+
+Naming a file the report did not measure writes nothing and exits 2; otherwise `loosen` exits 0.
+
+Neither `ratchet` nor `loosen` rewrites a `reason`. When either one moves a floor that has a reason, it names the floor so you can reread the prose:
+
+```
+Warning: Thresholds.fs (macos): branch 91 -> 90; its reason may quote the old number
+```
 
 ### Show improvement targets
 
@@ -149,6 +164,8 @@ coverageratchet check-json [config-path] [output-path]
 ```
 
 Writes machine-readable coverage results. The exit code really does match `check` now — same verdict, so count floors and unmeasured floors are included, where previously `check-json` looked only at percentage floors on files the report happened to contain. The results file is written before the verdict is rendered, so CI still has something to upload on a red run. Used by CI workflows to upload coverage data as an artifact.
+
+Besides `platform` and `results`, the file has an `excluded` list: each file the reader skipped, with the reason `targets` gives (e.g. `{ "file": "MyLib.AssemblyInfo.fs", "reason": "in a directory named \"obj\"" }`). A consumer can then tell a skipped file from a missing one; `loosen-from-ci` and `propose-from-ci` ignore it.
 
 ### Sync thresholds from CI
 
@@ -175,11 +192,14 @@ file is the output of `check-json` with shape:
   "results": {
     "Foo.fs": { "line": 72, "branch": 54 },
     "Bar.fs": { "line": 80, "branch": 100 }
-  }
+  },
+  "excluded": [
+    { "file": "MyLib.AssemblyInfo.fs", "reason": "in a directory named \"obj\"" }
+  ]
 }
 ```
 
-`platform` is one of `linux`, `macos`, `windows`. `<project>` matches the
+`platform` is one of `linux`, `macos`, `windows`. `excluded` is informational and optional; only `platform` and `results` are read. `<project>` matches the
 suffix of the local `coverage-ratchet-<project>.json` config; files named
 `coverage-thresholds-default.json` (or `coverage-thresholds-.json`) merge
 into the default `coverage-ratchet.json` config. The reusable build workflow

@@ -47,7 +47,7 @@ coverageratchet
 # Check current coverage against thresholds (use in CI)
 coverageratchet check
 
-# Set thresholds to current coverage (makes check pass immediately)
+# Lower failing files' floors to current coverage (makes check pass immediately)
 coverageratchet loosen
 
 # Record each file's current covered-LINE COUNT as a floor
