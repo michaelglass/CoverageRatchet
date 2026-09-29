@@ -3,6 +3,7 @@
 ## Unreleased
 
 - fix: the reader's directory rules now apply only below the config file's directory, so a checkout that itself sits under a directory named `tests`, `test` or `obj` is measured instead of reading nothing (`check` used to exit 2). A report path outside that directory is still matched in full.
+- fix: a coverage report written on Windows (backslash paths) and checked on macOS or Linux matches floors by base name, like one read on Windows. Before, each file was keyed by its whole path, so its floor never matched and `check`, `targets` and `gaps` showed the full Windows path.
 
 ## 0.15.0-alpha.19 - 2026-09-29
 

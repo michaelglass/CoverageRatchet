@@ -225,7 +225,7 @@ type UnmeasuredFloor =
 /// PURE: every configured floor this report cannot speak to.
 ///
 /// Floor keys are BASENAMES — `Cobertura.parseFiles` stores
-/// `Path.GetFileName` — so this deliberately cannot separate "the file was
+/// the text after the last `/` or `\` — so this deliberately cannot separate "the file was
 /// deleted from the tree" from "the file is still there and this run did not
 /// measure it". There is no path to stat. Both are reported the same way and
 /// the remedy text names both, because silently guessing between them is

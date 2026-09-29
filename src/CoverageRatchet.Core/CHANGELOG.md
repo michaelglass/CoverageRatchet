@@ -3,6 +3,7 @@
 ## Unreleased
 
 - feat!: `ReaderOptions` gains `Root: string option`. When it is set and a file's path lies under it (ignoring case, `/` and `\` alike), the directory rules see only the directories below it, so a checkout under a directory named `tests`, `test` or `obj` is read. `ReaderOptions.defaults` has `Root = None`, which keeps matching the whole path; a record built field by field must now give `Root`.
+- fix: a file's key (`FileCoverage.FileName`, `RawLine.FileName`, `ExcludedFile.FileName`) is the text after the last `/` or `\` on every OS. `Path.GetFileName` splits on `\` only on Windows, so a report written on Windows and read on macOS or Linux keyed each file by its whole path, and floors keyed by base name did not match it.
 
 ## 0.1.0-alpha.12 - 2026-09-29
 

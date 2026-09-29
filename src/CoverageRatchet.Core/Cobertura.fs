@@ -147,6 +147,12 @@ let private matches (directory: string) =
     | Named name -> equalsIgnoringCase directory name
     | NameEndsWith suffix -> directory.EndsWith(suffix, ignoringCase)
 
+/// The text after the last `/` or `\`. `Path.GetFileName` splits on `\` only on
+/// Windows, so a report written on Windows would otherwise key a file by its whole
+/// path when read on macOS or Linux.
+let private baseName (path: string) =
+    path.Substring(path.LastIndexOfAny([| '/'; '\\' |]) + 1)
+
 let private toForwardSlashes (path: string) = path.Replace('\\', '/')
 
 /// The part of `fileName` below `root`, or `fileName` itself when it is not under `root`.
@@ -228,7 +234,7 @@ let private readClassLines (fileName: string) (classEl: XElement) : RawLine list
 
                 Some
                     {
-                        FileName = Path.GetFileName(fileName)
+                        FileName = baseName fileName
                         LineNum = int numAttr.Value
                         WasHit = int hitsAttr.Value > 0
                         BrCovered = brCovered
@@ -240,7 +246,7 @@ let private readClassLines (fileName: string) (classEl: XElement) : RawLine list
         // Placeholder so a zero-line class still appears (as 100%); buildCoverage drops LineNum -1.
         [
             {
-                FileName = Path.GetFileName(fileName)
+                FileName = baseName fileName
                 LineNum = -1
                 WasHit = false
                 BrCovered = 0
@@ -269,7 +275,7 @@ let readReports (options: ReaderOptions) (xmlContents: string list) : Report =
             | Some reason ->
                 Choice2Of2
                     {
-                        FileName = Path.GetFileName(fileName)
+                        FileName = baseName fileName
                         Reason = reason
                     })
 

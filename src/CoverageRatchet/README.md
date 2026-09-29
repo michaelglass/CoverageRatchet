@@ -96,9 +96,10 @@ build output (`obj`) or vendored code (`paket-files`, `vendor`, `node_modules`,
 `TestKit.fs` is measured. `includedExtensions` in the config narrows the
 languages (see [Source languages](#source-languages)).
 
-The rules see the path the report records, and `dotnet test --coverage`
-records absolute ones: a checkout under a directory named `tests` reads
-nothing, and `check` exits 2.
+`dotnet test --coverage` records absolute paths, so the rules look only at
+the part of each path below the config file's directory: a checkout that
+itself sits under a directory named `tests` is still measured. A path
+outside that directory is matched in full.
 
 A skipped file never gets a floor, so it is missing from both sides of `N/N`.
 `check` says how many were skipped:
