@@ -64,10 +64,15 @@ let private mergeBaselinesDescription =
     "before reading coverage, merge each coverage.cobertura.xml onto its sibling coverage.baseline.xml "
     + "(max hits per line) so partial test runs cannot lower the ratchet. Bootstraps a baseline on first use."
 
+/// The commands `takesFileScope` accepts, as the CLI names them. An attribute needs a
+/// literal; a test holds the two together.
+[<Literal>]
+let internal fileScopedCommands = "baseline-lines and loosen"
+
 /// Flags accepted before or after the command.
 [<RequireQualifiedAccess>]
 type GlobalFlag =
-    | [<CmdFlag(Repeatable = true, Description = "(baseline-lines and loosen only) change only this file's floor")>] File of
+    | [<CmdFlag(Repeatable = true, Description = "(" + fileScopedCommands + " only) change only this file's floor")>] File of
         name: string
     | [<CmdFlag(Description = searchDirDescription)>] SearchDir of path: string
     | [<CmdFlag(Description = mergeBaselinesDescription)>] MergeBaselines
@@ -747,7 +752,27 @@ let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string)
     | CfTargets -> runTargets configPath report.Excluded files
     | CfGaps -> runGaps report.Lines
 
-/// `fileScope` is the `--file` list; only `baseline-lines` and `loosen` accept one.
+/// What `command` does with the coverage report, or `None` for a command that reads
+/// none. `fileScope` goes to the cases that carry one.
+let private coverageFileCommand (fileScope: string list) (command: Command) : CoverageFileCommand option =
+    match command with
+    | Ratchet _ -> Some CfRatchet
+    | Check _ -> Some CfCheck
+    | Loosen _ -> Some(CfLoosen fileScope)
+    | BaselineLines _ -> Some(CfBaselineLines fileScope)
+    | CheckJson(output = outputOpt) -> Some(CfCheckJson outputOpt)
+    | Targets _ -> Some CfTargets
+    | Gaps _ -> Some CfGaps
+    | LoosenFromCi _
+    | Merge _
+    | RefreshBaseline
+    | ProposeFromCi _ -> None
+
+/// `--file` is accepted exactly where `coverageFileCommand` hands the scope on.
+let internal takesFileScope (command: Command) =
+    coverageFileCommand [] command <> coverageFileCommand [ "--file" ] command
+
+/// `fileScope` is the `--file` list; only a command that `takesFileScope` accepts one.
 let runScoped
     (fileScope: string list)
     (command: Command)
@@ -755,15 +780,8 @@ let runScoped
     (mergeBaselines: bool)
     : Result<int, string> =
     match command with
-    | Merge _
-    | RefreshBaseline
-    | Ratchet _
-    | Check _
-    | CheckJson _
-    | Targets _
-    | Gaps _
-    | LoosenFromCi _
-    | ProposeFromCi _ when not (List.isEmpty fileScope) -> Error "--file applies to baseline-lines and loosen only"
+    | _ when not (List.isEmpty fileScope || takesFileScope command) ->
+        Error("--file applies to " + fileScopedCommands + " only")
     | Merge {
                 Baseline = baseline
                 Partial = partialFile
@@ -802,21 +820,7 @@ let runScoped
             | RefreshBaseline
             | ProposeFromCi _ -> defaultConfigPath
 
-        let coverageFileCmd =
-            match command with
-            | Ratchet _ -> Some CfRatchet
-            | Check _ -> Some CfCheck
-            | Loosen _ -> Some(CfLoosen fileScope)
-            | BaselineLines _ -> Some(CfBaselineLines fileScope)
-            | CheckJson(output = outputOpt) -> Some(CfCheckJson outputOpt)
-            | Targets _ -> Some CfTargets
-            | Gaps _ -> Some CfGaps
-            | LoosenFromCi _ -> None
-            | Merge _
-            | RefreshBaseline
-            | ProposeFromCi _ -> None
-
-        match coverageFileCmd with
+        match coverageFileCommand fileScope command with
         | None ->
             let runCi = Shell.runWithGitDir (resolveGitDir (Directory.GetCurrentDirectory()))
             Ok(runLoosenFromCi Shell.run runCi configPath)

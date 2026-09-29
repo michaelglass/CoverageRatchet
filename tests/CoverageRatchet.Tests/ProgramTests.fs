@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Text.Json
 open Xunit
+open Microsoft.FSharp.Reflection
 open Tests.Common
 open Swensen.Unquote
 open CoverageRatchet.Thresholds
@@ -2654,6 +2655,33 @@ let ``runScoped - --file on a command other than baseline-lines is an error`` ()
 
         test <@ Result.isError result @>
         test <@ File.ReadAllText(configPath) = twoPlatformDocument @>)
+
+[<Fact>]
+let ``--file - is taken by exactly the commands its help and error name`` () =
+    let every =
+        [
+            Ratchet None
+            Check None
+            Loosen None
+            CheckJson(None, None)
+            BaselineLines None
+            Targets None
+            Gaps None
+            LoosenFromCi None
+            Merge
+                {
+                    Baseline = "b"
+                    Partial = "p"
+                    Output = "o"
+                }
+            RefreshBaseline
+            ProposeFromCi("1", None)
+        ]
+
+    test <@ every.Length = FSharpType.GetUnionCases(typeof<Command>).Length @>
+    test <@ every |> List.filter takesFileScope = [ Loosen None; BaselineLines None ] @>
+    test <@ fileScopedCommands = "baseline-lines and loosen" @>
+    test <@ runScoped [ "Foo.fs" ] (Check None) "." false = Error "--file applies to baseline-lines and loosen only" @>
 
 let private parseFileScope (argv: string array) =
     cliSpec.Parse argv
