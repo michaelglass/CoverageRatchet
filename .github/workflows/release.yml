@@ -20,9 +20,16 @@ jobs:
     permissions:
       contents: write
 
-  # NuGet Trusted Publishing requires nuget/login to run in the calling repo's
-  # workflow, not a reusable workflow from another repo. The OIDC token's
-  # job_workflow_ref must match the repo's own workflow file.
+  # NuGet Trusted Publishing requires nuget/login to run in THIS repo's workflow,
+  # not in a reusable workflow from another repo: the OIDC token's
+  # job_workflow_ref must match the calling repo's own workflow file. So the
+  # credential exchange and the push live here while the pack/tag/release work
+  # stays in the shared workflow above. One publish job per package, because each
+  # tag prefix triggers exactly one release job and a skipped `needs` skips its
+  # dependants.
+  #
+  # Needs the `NUGET_USER` repository variable (the nuget.org username) and this
+  # repo registered as a trusted publisher for each package on nuget.org.
   publish-coverageratchet:
     if: startsWith(github.ref, 'refs/tags/coverageratchet-v')
     needs: release-coverageratchet
