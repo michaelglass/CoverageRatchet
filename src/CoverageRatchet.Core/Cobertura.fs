@@ -37,13 +37,20 @@ type DirectoryRule =
 /// Which `<class>` elements of a Cobertura report the reader reads.
 ///
 /// A file is read when its name ends with one of `IncludedExtensions` and no directory
-/// in its path matches one of `ExcludedDirectories`, both ignoring case. The rules see
-/// the path exactly as the report records it, which for an absolute path includes the
-/// directories above the checkout.
+/// in its path matches one of `ExcludedDirectories`, both ignoring case.
+///
+/// When `Root` is set and the path lies under it, the directory rules see only the
+/// directories below `Root`, so a checkout under e.g. `~/work/tests/` is still read.
+/// A path outside `Root`, or any path when `Root` is `None`, is matched as the report
+/// records it, which for an absolute path includes the directories above the checkout.
+/// `Root` is compared as a string (ignoring case, `/` and `\` alike); the filesystem is
+/// never consulted.
 type ReaderOptions =
     {
         IncludedExtensions: string[]
         ExcludedDirectories: DirectoryRule[]
+        /// The directory the rules are relative to; the CLI passes its config file's directory.
+        Root: string option
     }
 // sync:reader-options:end
 
@@ -73,6 +80,7 @@ module ReaderOptions =
                     Named "node_modules"
                     Named ".fable"
                 |]
+            Root = None
         }
     // sync:reader-defaults:end
 
@@ -139,6 +147,23 @@ let private matches (directory: string) =
     | Named name -> equalsIgnoringCase directory name
     | NameEndsWith suffix -> directory.EndsWith(suffix, ignoringCase)
 
+let private toForwardSlashes (path: string) = path.Replace('\\', '/')
+
+/// The part of `fileName` below `root`, or `fileName` itself when it is not under `root`.
+/// Both are compared with `/` and `\` alike and ignoring case, and the prefix must end on
+/// a separator, so root `/x/re` does not claim `/x/repo/A.fs`.
+let private relativeToRoot (root: string option) (fileName: string) : string =
+    match root with
+    | None -> fileName
+    | Some root ->
+        let prefix = (toForwardSlashes root).TrimEnd('/') + "/"
+        let path = toForwardSlashes fileName
+
+        if path.StartsWith(prefix, ignoringCase) then
+            path.Substring(prefix.Length)
+        else
+            fileName
+
 /// `None` when the file is read. The extension is checked first, then each directory
 /// from the root down, so the first rule that matches is the reason reported.
 let private classify (options: ReaderOptions) (fileName: string) : ExclusionReason option =
@@ -151,7 +176,7 @@ let private classify (options: ReaderOptions) (fileName: string) : ExclusionReas
         Some(ExcludedByExtension(Path.GetExtension(fileName)))
     else
         let segments =
-            fileName.Split([| '/'; '\\' |], System.StringSplitOptions.RemoveEmptyEntries)
+            (relativeToRoot options.Root fileName).Split([| '/'; '\\' |], System.StringSplitOptions.RemoveEmptyEntries)
 
         segments
         |> Array.take (segments.Length - 1)

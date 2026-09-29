@@ -364,6 +364,30 @@ let ``run - check on an empty coverage report is undeterminable, not a pass`` ()
         test <@ output.Contains("NOTHING MEASURED") @>)
 
 [<Fact>]
+let ``run - check measures a checkout that sits under a directory named tests`` () =
+    withTempDir (fun tmpDir ->
+        let repoDir = Path.Combine(tmpDir, "work", "tests", "repo")
+        Directory.CreateDirectory(repoDir) |> ignore
+        let source = Path.Combine(repoDir, "src", "Foo.fs")
+        let testSource = Path.Combine(repoDir, "tests", "FooTests.fs")
+
+        let xml =
+            $"""<?xml version="1.0"?><coverage><packages><package><classes>
+<class filename="{source}"><lines><line number="1" hits="1" /></lines></class>
+<class filename="{testSource}"><lines><line number="1" hits="0" /></lines></class>
+</classes></package></packages></coverage>"""
+
+        File.WriteAllText(Path.Combine(repoDir, "coverage.cobertura.xml"), xml)
+
+        let output, result =
+            withCapturedConsole (fun () ->
+                run (Check(config = Some(Path.Combine(repoDir, "config.json")))) repoDir false)
+
+        test <@ result = Ok 0 @>
+        test <@ not (output.Contains("NOTHING MEASURED")) @>
+        test <@ output.Contains("1/1") @>)
+
+[<Fact>]
 let ``run - check-json on a report with no source file is undeterminable, not a pass`` () =
     withTempDir (fun tmpDir ->
         let xml =

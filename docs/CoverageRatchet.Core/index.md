@@ -109,6 +109,7 @@ let defaults =
                 Named "node_modules"
                 Named ".fable"
             |]
+        Root = None
     }
 ```
 <!-- sync:reader-defaults:end -->
@@ -129,13 +130,20 @@ type DirectoryRule =
 /// Which `<class>` elements of a Cobertura report the reader reads.
 ///
 /// A file is read when its name ends with one of `IncludedExtensions` and no directory
-/// in its path matches one of `ExcludedDirectories`, both ignoring case. The rules see
-/// the path exactly as the report records it, which for an absolute path includes the
-/// directories above the checkout.
+/// in its path matches one of `ExcludedDirectories`, both ignoring case.
+///
+/// When `Root` is set and the path lies under it, the directory rules see only the
+/// directories below `Root`, so a checkout under e.g. `~/work/tests/` is still read.
+/// A path outside `Root`, or any path when `Root` is `None`, is matched as the report
+/// records it, which for an absolute path includes the directories above the checkout.
+/// `Root` is compared as a string (ignoring case, `/` and `\` alike); the filesystem is
+/// never consulted.
 type ReaderOptions =
     {
         IncludedExtensions: string[]
         ExcludedDirectories: DirectoryRule[]
+        /// The directory the rules are relative to; the CLI passes its config file's directory.
+        Root: string option
     }
 ```
 <!-- sync:reader-options:end -->

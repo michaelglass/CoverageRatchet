@@ -663,3 +663,110 @@ let ``ReaderOptions.includingOnly - an extension the reader does not know is an 
             ReaderOptions.includingOnly [ ".fsx" ] =
                 Error "\".fsx\" is not a source extension the reader measures; name one or more of .fs, .cs, .vb"
         @>
+
+let private rootedAt (root: string) =
+    { ReaderOptions.defaults with
+        Root = Some root
+    }
+
+[<Fact>]
+let ``ReaderOptions.defaults - has no root`` () =
+    test <@ ReaderOptions.defaults.Root = None @>
+
+[<Fact>]
+let ``ReaderOptions.includingOnly - keeps the defaults' root`` () =
+    test <@ ReaderOptions.includingOnly [ ".fs" ] |> Result.map (fun o -> o.Root) = Ok None @>
+
+[<Fact>]
+let ``readReports - with a root, directories above it are not matched`` () =
+    let xmls =
+        [
+            classXml "/x/tests/repo/src/A.fs" [ 1, 1 ]
+            classXml "/x/tests/repo/tests/B.fs" [ 1, 1 ]
+            classXml "/x/tests/repo/obj/C.fs" [ 1, 1 ]
+        ]
+
+    let report = readReports (rootedAt "/x/tests/repo") xmls
+
+    test <@ readNames (rootedAt "/x/tests/repo") xmls = [ "A.fs" ] @>
+
+    test
+        <@
+            reasons report =
+                [
+                    "B.fs", ExcludedByDirectory(Named "tests")
+                    "C.fs", ExcludedByDirectory(Named "obj")
+                ]
+        @>
+
+[<Fact>]
+let ``readReports - with a root, a path outside it is matched in full`` () =
+    let report =
+        readReports (rootedAt "/x/tests/repo") [ classXml "/elsewhere/tests/D.fs" [ 1, 1 ] ]
+
+    test <@ report.Lines |> List.isEmpty @>
+    test <@ reasons report = [ "D.fs", ExcludedByDirectory(Named "tests") ] @>
+
+[<Fact>]
+let ``readReports - without a root, directories above the checkout are matched`` () =
+    let report =
+        readReports ReaderOptions.defaults [ classXml "/x/tests/repo/src/A.fs" [ 1, 1 ] ]
+
+    test <@ report.Lines |> List.isEmpty @>
+    test <@ reasons report = [ "A.fs", ExcludedByDirectory(Named "tests") ] @>
+
+[<Fact>]
+let ``readReports - a Windows root matches Windows paths on any OS`` () =
+    let xmls =
+        [
+            classXml "C:\\x\\tests\\repo\\src\\A.fs" [ 1, 1 ]
+            classXml "C:\\x\\tests\\repo\\tests\\B.fs" [ 1, 1 ]
+        ]
+
+    // Base names are left to Path.GetFileName, which splits on `\` only on Windows, so
+    // this test counts what was read and names the rule instead.
+    let report = readReports (rootedAt "C:\\x\\tests\\repo") xmls
+
+    test <@ report.Lines |> List.length = 1 @>
+    test <@ report.Excluded |> List.map (fun e -> e.Reason) = [ ExcludedByDirectory(Named "tests") ] @>
+
+[<Fact>]
+let ``readReports - the root matches ignoring case and separator style`` () =
+    let xmls = [ classXml "c:/X/Tests/Repo/src/A.fs" [ 1, 1 ] ]
+
+    test <@ readNames (rootedAt "C:\\x\\tests\\repo") xmls = [ "A.fs" ] @>
+    test <@ readNames (rootedAt "/X/TESTS/REPO") [ classXml "/x/tests/repo/src/A.fs" [ 1, 1 ] ] = [ "A.fs" ] @>
+
+[<Fact>]
+let ``readReports - a trailing separator on the root does not matter`` () =
+    let xmls = [ classXml "/x/tests/repo/src/A.fs" [ 1, 1 ] ]
+
+    test <@ readNames (rootedAt "/x/tests/repo/") xmls = [ "A.fs" ] @>
+
+    test
+        <@
+            (readReports (rootedAt "C:\\x\\tests\\repo\\") [ classXml "C:\\x\\tests\\repo\\src\\A.fs" [ 1, 1 ] ])
+                .Excluded
+            |> List.isEmpty
+        @>
+
+[<Fact>]
+let ``readReports - the root must end on a directory boundary`` () =
+    let xmls = [ classXml "/x/tests/repo/src/A.fs" [ 1, 1 ] ]
+
+    test <@ readNames (rootedAt "/x/tests/re") xmls |> List.isEmpty @>
+
+    test
+        <@
+            (readReports (rootedAt "/x/tests/re") xmls).Excluded
+            |> List.map (fun e -> e.Reason)
+                =
+                [ ExcludedByDirectory(Named "tests") ]
+        @>
+
+[<Fact>]
+let ``readReports - with a root, the excluded file is still reported by base name`` () =
+    let report =
+        readReports (rootedAt "/x/tests/repo") [ classXml "/x/tests/repo/My.Tests/Fixture.fs" [ 1, 1 ] ]
+
+    test <@ reasons report = [ "Fixture.fs", ExcludedByDirectory(NameEndsWith ".Tests") ] @>
