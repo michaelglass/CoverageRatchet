@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0-alpha.20 - 2026-09-30
+
 - fix: the reader's directory rules now apply only below the config file's directory, so a checkout that itself sits under a directory named `tests`, `test` or `obj` is measured instead of reading nothing (`check` used to exit 2). A report path outside that directory is still matched in full.
 - fix: a coverage report written on Windows (backslash paths) and checked on macOS or Linux matches floors by base name, like one read on Windows. Before, each file was keyed by its whole path, so its floor never matched and `check`, `targets` and `gaps` showed the full Windows path.
 - feat: `check-json` writes an `excluded` list next to `platform` and `results`: each file the reader skipped, as `{ "file": "MyLib.AssemblyInfo.fs", "reason": "in a directory named \"obj\"" }`, with the same reason text as `targets`. A consumer can tell a skipped file from a missing one. `loosen-from-ci` and `propose-from-ci` read only `platform` and `results`, so older artifacts and newer ones both work.
