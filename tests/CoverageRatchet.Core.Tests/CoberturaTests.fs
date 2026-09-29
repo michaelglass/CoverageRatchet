@@ -752,14 +752,7 @@ let ``readReports - the root must end on a directory boundary`` () =
     let xmls = [ classXml "/x/tests/repo/src/A.fs" [ 1, 1 ] ]
 
     test <@ readNames (rootedAt "/x/tests/re") xmls |> List.isEmpty @>
-
-    test
-        <@
-            (readReports (rootedAt "/x/tests/re") xmls).Excluded
-            |> List.map (fun e -> e.Reason)
-                =
-                [ ExcludedByDirectory(Named "tests") ]
-        @>
+    test <@ reasons (readReports (rootedAt "/x/tests/re") xmls) = [ "A.fs", ExcludedByDirectory(Named "tests") ] @>
 
 [<Fact>]
 let ``readReports - with a root, the excluded file is still reported by base name`` () =
@@ -769,27 +762,12 @@ let ``readReports - with a root, the excluded file is still reported by base nam
     test <@ reasons report = [ "Fixture.fs", ExcludedByDirectory(NameEndsWith ".Tests") ] @>
 
 [<Fact>]
-let ``readReports - a Windows path is keyed by its base name on any OS`` () =
-    let report =
-        readReports ReaderOptions.defaults [ classXml "C:\\src\\Lib\\A.fs" [ 1, 1; 2, 0 ] ]
-
-    test <@ report.Lines |> List.map (fun r -> r.FileName) |> List.distinct = [ "A.fs" ] @>
-
-    test
-        <@
-            parseXml (classXml "C:\\src\\Lib\\A.fs" [ 1, 1 ])
-            |> List.map (fun f -> f.FileName)
-                =
-                [ "A.fs" ]
-        @>
-
-[<Fact>]
 let ``readReports - the Windows and POSIX forms of a path share one key`` () =
     let windows = classXml "C:\\src\\Lib\\A.fs" [ 1, 1; 2, 0 ]
     let posix = classXml "/src/Lib/A.fs" [ 1, 0; 2, 1 ]
 
-    test <@ parseXmls [ windows ] |> List.map (fun f -> f.FileName) = [ "A.fs" ] @>
-    test <@ parseXmls [ posix ] |> List.map (fun f -> f.FileName) = [ "A.fs" ] @>
+    test <@ readNames ReaderOptions.defaults [ windows ] = [ "A.fs" ] @>
+    test <@ readNames ReaderOptions.defaults [ posix ] = [ "A.fs" ] @>
 
     test
         <@

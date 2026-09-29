@@ -136,8 +136,8 @@ type DirectoryRule =
 /// directories below `Root`, so a checkout under e.g. `~/work/tests/` is still read.
 /// A path outside `Root`, or any path when `Root` is `None`, is matched as the report
 /// records it, which for an absolute path includes the directories above the checkout.
-/// `Root` is compared as a string (ignoring case, `/` and `\` alike); the filesystem is
-/// never consulted.
+/// `Root` is compared directory by directory (ignoring case, `/` and `\` alike); the
+/// filesystem is never consulted.
 type ReaderOptions =
     {
         IncludedExtensions: string[]
