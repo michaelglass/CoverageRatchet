@@ -21,7 +21,8 @@ permissions:
 jobs:
   docs:
     # Prereleases do not publish docs. The leading hyphen matters: it anchors the
-    # match to the SemVer prerelease separator, so `v1.0.0-alpha.1` is skipped.
+    # match to the SemVer prerelease separator, so `v1.0.0-alpha.1` is skipped
+    # while a release of a package whose own name contains "rc" or "beta" is not.
     if: "!contains(github.ref, '-alpha') && !contains(github.ref, '-beta') && !contains(github.ref, '-rc')"
     uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-docs.yml@main
     with:
