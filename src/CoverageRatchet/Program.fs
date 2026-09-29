@@ -1007,15 +1007,6 @@ Examples:
 Run 'coverageratchet <command> --help' for command-specific details.
 """
 
-/// `cliSpec.Parse`, except argv holding only global flags runs the default command.
-/// CommandTree 0.11.3 cannot run a default command that takes arguments when argv
-/// names no command, so name it explicitly; drop this once that CommandTree fix ships.
-let parseArgv (argv: string array) : Result<GlobalFlag list * Command, ParseError> =
-    match cliSpec.Parse argv with
-    | Error(InvalidArguments(_, "Default command requires no arguments")) ->
-        cliSpec.Parse(Array.append [| "ratchet" |] argv)
-    | parsed -> parsed
-
 let private normalizeHelpFlags (argv: string array) : string array =
     argv |> Array.map (fun a -> if a = "-h" || a = "help" then "--help" else a)
 
@@ -1042,17 +1033,14 @@ let main argv =
             eprintfn "Error: %s" msg
             1
 
-    if Array.isEmpty argv then
-        runOrReport [] (Ratchet None)
-    else
-        match parseArgv argv with
-        | Ok(globals, cmd) -> runOrReport globals cmd
-        | Error(HelpRequested path) ->
-            printHelp path
-            0
-        | Error VersionRequested ->
-            printfn "%s" (CommandTree.renderVersion "coverageratchet")
-            0
-        | Error err ->
-            eprintfn "%s" (CommandTree.renderParseError tree err "coverageratchet")
-            if CommandTree.isError err then 1 else 0
+    match cliSpec.Parse argv with
+    | Ok(globals, cmd) -> runOrReport globals cmd
+    | Error(HelpRequested path) ->
+        printHelp path
+        0
+    | Error VersionRequested ->
+        printfn "%s" (CommandTree.renderVersion "coverageratchet")
+        0
+    | Error err ->
+        eprintfn "%s" (CommandTree.renderParseError tree err "coverageratchet")
+        if CommandTree.isError err then 1 else 0

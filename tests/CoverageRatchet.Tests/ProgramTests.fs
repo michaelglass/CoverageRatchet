@@ -1547,7 +1547,7 @@ let ``vcsCommitAndPush - jj fails falls back to git workflow`` () =
     test <@ calls |> List.exists (fun (_, a) -> a.Contains "commit") @>
 
 let private parseGlobals (argv: string array) =
-    parseArgv argv
+    cliSpec.Parse argv
     |> Result.map (fun (globals, cmd) -> searchDirOf globals, mergeBaselinesOf globals, cmd)
 
 [<Fact>]
@@ -1613,13 +1613,17 @@ let ``global flags - tokens after -- are not consumed as flags`` () =
     // After `--` a flag-looking token belongs to the command: it is never applied as a
     // global flag and never swallows the next token as its value.
     let notAppliedAsFlag argv =
-        match parseArgv argv with
+        match cliSpec.Parse argv with
         | Ok(globals, _) -> searchDirOf globals = "." && not (mergeBaselinesOf globals)
         | Error _ -> true
 
     test <@ notAppliedAsFlag [| "check"; "--"; "--merge-baselines" |] @>
     test <@ notAppliedAsFlag [| "check"; "--"; "--search-dir"; "coverage" |] @>
     test <@ main [| "check"; "--"; "--merge-baselines" |] = 1 @>
+
+[<Fact>]
+let ``empty argv parses as the default ratchet`` () =
+    test <@ parseGlobals [||] = Ok(".", false, Ratchet None) @>
 
 [<Fact>]
 let ``global flags - only global flags runs the default ratchet`` () =
