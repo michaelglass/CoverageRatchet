@@ -332,7 +332,14 @@ let private runLoosen (configPath: string) (files: FileCoverage list) =
 
 /// `check` that also writes a results file. The file is written before the verdict,
 /// so a CI job can upload it from a red run; the exit code matches `check`.
-let private runCheckJson (configPath: string) (outputPath: string) (files: FileCoverage list) =
+/// `excluded` lists the files the reader skipped, so a consumer can tell a skipped
+/// file from a missing one; `parseCiThresholds` reads only `platform` and `results`.
+let private runCheckJson
+    (configPath: string)
+    (outputPath: string)
+    (exclusions: ExcludedFile list)
+    (files: FileCoverage list)
+    =
     let config = loadConfig configPath
     let allResults = buildFileResults config files
 
@@ -347,6 +354,15 @@ let private runCheckJson (configPath: string) (outputPath: string) (files: FileC
     let wrapper = System.Collections.Generic.Dictionary<string, obj>()
     wrapper.["platform"] <- Platform.toString Platform.current
     wrapper.["results"] <- resultsDict
+
+    wrapper.["excluded"] <-
+        exclusions
+        |> List.map (fun e ->
+            let entry = System.Collections.Generic.Dictionary<string, obj>()
+            entry.["file"] <- e.FileName
+            entry.["reason"] <- ExclusionReason.describe e.Reason
+            entry)
+        |> List.toArray
 
     let json = JsonSerializer.Serialize(wrapper, jsonOptions)
     File.WriteAllText(outputPath, json)
@@ -709,7 +725,7 @@ let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string)
     | CfBaselineLines scope -> runBaselineLines configPath scope files
     | CfCheckJson outputOpt ->
         let outputPath = outputOpt |> Option.defaultValue "coverage-results.json"
-        runCheckJson configPath outputPath files
+        runCheckJson configPath outputPath report.Excluded files
     | CfTargets -> runTargets configPath report.Excluded files
     | CfGaps -> runGaps report.Lines
 
@@ -898,7 +914,8 @@ real counts.
             """
 Run 'check' and write per-file results as JSON for CI to upload as
 an artifact. Output includes the detected platform so loosen-from-ci
-can merge results from other platforms back in.
+can merge results from other platforms back in, and an "excluded"
+list of the files the reader skipped, each with its reason.
 """
     | [ "targets" ] ->
         Some

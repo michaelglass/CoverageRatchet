@@ -287,6 +287,15 @@ let ``parseCiThresholds - parses minimal JSON format`` () =
     test <@ results.["Foo.fs"] = { Line = 59.0; Branch = 23.0 } @>
 
 [<Fact>]
+let ``parseCiThresholds - ignores the excluded list check-json writes`` () =
+    let json =
+        """{"platform":"linux","results":{"Foo.fs":{"line":59,"branch":23}},"excluded":[{"file":"Gen.fs","reason":"in a directory named \"obj\""}]}"""
+
+    let platform, results = parseCiThresholds json
+    test <@ platform = Linux @>
+    test <@ results = Map.ofList [ "Foo.fs", { Line = 59.0; Branch = 23.0 } ] @>
+
+[<Fact>]
 let ``parseCiThresholds - empty string raises actionable error`` () =
     let ex = Assert.ThrowsAny<exn>(fun () -> parseCiThresholds "" |> ignore)
     test <@ ex.Message.Contains("empty") @>

@@ -151,6 +151,8 @@ coverageratchet check-json [config-path] [output-path]
 
 Writes machine-readable coverage results. The exit code really does match `check` now — same verdict, so count floors and unmeasured floors are included, where previously `check-json` looked only at percentage floors on files the report happened to contain. The results file is written before the verdict is rendered, so CI still has something to upload on a red run. Used by CI workflows to upload coverage data as an artifact.
 
+Besides `platform` and `results`, the file has an `excluded` list: each file the reader skipped, with the reason `targets` gives (e.g. `{ "file": "MyLib.AssemblyInfo.fs", "reason": "in a directory named \"obj\"" }`). A consumer can then tell a skipped file from a missing one; `loosen-from-ci` and `propose-from-ci` ignore it.
+
 ### Sync thresholds from CI
 
 ```bash
@@ -176,11 +178,14 @@ file is the output of `check-json` with shape:
   "results": {
     "Foo.fs": { "line": 72, "branch": 54 },
     "Bar.fs": { "line": 80, "branch": 100 }
-  }
+  },
+  "excluded": [
+    { "file": "MyLib.AssemblyInfo.fs", "reason": "in a directory named \"obj\"" }
+  ]
 }
 ```
 
-`platform` is one of `linux`, `macos`, `windows`. `<project>` matches the
+`platform` is one of `linux`, `macos`, `windows`. `excluded` is informational and optional; only `platform` and `results` are read. `<project>` matches the
 suffix of the local `coverage-ratchet-<project>.json` config; files named
 `coverage-thresholds-default.json` (or `coverage-thresholds-.json`) merge
 into the default `coverage-ratchet.json` config. The reusable build workflow

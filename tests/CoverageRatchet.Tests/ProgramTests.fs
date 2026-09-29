@@ -504,6 +504,52 @@ let ``run - check-json writes platform and file results to output file`` () =
         test <@ fooBranch = 100 @>)
 
 [<Fact>]
+let ``run - check-json lists the files the reader skipped, with the check exit code`` () =
+    withTempDir (fun tmpDir ->
+        let xml =
+            """<?xml version="1.0"?><coverage><packages><package><classes>
+<class filename="/repo/src/Foo.fs"><lines><line number="1" hits="1" /></lines></class>
+<class filename="/repo/src/obj/Debug/Foo.AssemblyInfo.fs"><lines><line number="1" hits="0" /></lines></class>
+</classes></package></packages></coverage>"""
+
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), xml)
+        let configPath = Path.Combine(tmpDir, "config.json")
+        let outputPath = Path.Combine(tmpDir, "output.json")
+
+        let checkResult = run (Check(config = Some configPath)) tmpDir false
+
+        let result =
+            run (CheckJson(config = Some configPath, output = Some outputPath)) tmpDir false
+
+        test <@ result = Ok 0 @>
+        test <@ result = checkResult @>
+
+        use doc = JsonDocument.Parse(File.ReadAllText outputPath)
+        let root = doc.RootElement
+
+        let excluded =
+            root.GetProperty("excluded").EnumerateArray()
+            |> Seq.map (fun e -> e.GetProperty("file").GetString(), e.GetProperty("reason").GetString())
+            |> Seq.toList
+
+        test <@ excluded = [ "Foo.AssemblyInfo.fs", "in a directory named \"obj\"" ] @>
+        let hasFoo = root.GetProperty("results").TryGetProperty("Foo.fs") |> fst
+        test <@ hasFoo @>)
+
+[<Fact>]
+let ``run - check-json writes an empty excluded list when nothing was skipped`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCoverageXml 100)
+        let outputPath = Path.Combine(tmpDir, "output.json")
+
+        let result =
+            run (CheckJson(config = Some(Path.Combine(tmpDir, "config.json")), output = Some outputPath)) tmpDir false
+
+        test <@ result = Ok 0 @>
+        use doc = JsonDocument.Parse(File.ReadAllText outputPath)
+        test <@ doc.RootElement.GetProperty("excluded").GetArrayLength() = 0 @>)
+
+[<Fact>]
 let ``run - check-json with passing coverage returns Ok 0`` () =
     withTempDir (fun tmpDir ->
         let xmlPath = Path.Combine(tmpDir, "coverage.cobertura.xml")
@@ -1733,6 +1779,47 @@ let ``runLoosenFromCi - CI coverage failure with valid artifact writes config an
         test <@ not (Directory.Exists artifactDir) @>
         let written = File.ReadAllText configPath
         test <@ written.Contains("Foo.fs") @>)
+
+[<Fact>]
+let ``runLoosenFromCi - an artifact with an excluded list merges only its results`` () =
+    let runId = 555444334L
+    let artifactDir = Path.Combine(Path.GetTempPath(), sprintf "coverage-%d" runId)
+    Directory.CreateDirectory(artifactDir) |> ignore
+
+    let thresholdsJson =
+        """{"platform":"linux","results":{"Foo.fs":{"line":59,"branch":23}},"excluded":[{"file":"Gen.fs","reason":"in a directory named \"obj\""}]}"""
+
+    File.WriteAllText(Path.Combine(artifactDir, "coverage-thresholds-default.json"), thresholdsJson)
+
+    Tests.Common.TestHelpers.withTempDir (fun tmpDir ->
+        let configPath = Path.Combine(tmpDir, "coverage-ratchet.json")
+
+        let failedJson =
+            sprintf """[{"status":"completed","conclusion":"failure","databaseId":%d}]""" runId
+
+        let passedJson =
+            """[{"status":"completed","conclusion":"success","databaseId":1}]"""
+
+        let run =
+            fakeRun
+                [
+                    ("jj", "git push", CoverageRatchet.Shell.Success "")
+                    ("jj", "log", CoverageRatchet.Shell.Success "oldsha")
+                    ("gh", "run list", CoverageRatchet.Shell.Success failedJson)
+                    ("gh", "run download", CoverageRatchet.Shell.Success "")
+                    ("jj", "describe", CoverageRatchet.Shell.Success "")
+                    ("jj", "bookmark set main -r @", CoverageRatchet.Shell.Success "")
+                    ("jj", "new", CoverageRatchet.Shell.Success "")
+                    ("jj", "git push --bookmark main", CoverageRatchet.Shell.Success "")
+                    ("jj", "log", CoverageRatchet.Shell.Success "newsha")
+                    ("gh", "run list", CoverageRatchet.Shell.Success passedJson)
+                ]
+
+        let result = runLoosenFromCi run run configPath
+        test <@ result = 0 @>
+        let written = File.ReadAllText configPath
+        test <@ written.Contains("Foo.fs") @>
+        test <@ not (written.Contains("Gen.fs")) @>)
 
 [<Fact>]
 let ``runLoosenFromCi - CI coverage failure with empty artifact returns 1`` () =

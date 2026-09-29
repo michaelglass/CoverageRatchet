@@ -9,5 +9,11 @@
       "line": 97,
       "branch": 100
     }
-  }
+  },
+  "excluded": [
+    {
+      "file": "Beta.AssemblyInfo.fs",
+      "reason": "in a directory named \"obj\""
+    }
+  ]
 }
