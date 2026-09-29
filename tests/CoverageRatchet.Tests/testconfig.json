@@ -1,0 +1,11 @@
+{
+  "codeCoverage": {
+    "Configuration": {
+      "CodeCoverage": {
+        "ModulePaths": {
+          "Include": [ ".*[/\\\\]CoverageRatchet\\.dll$" ]
+        }
+      }
+    }
+  }
+}

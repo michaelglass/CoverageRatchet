@@ -58,3 +58,12 @@ let otherPlatform =
     | MacOS -> Linux
     | Linux -> Windows
     | Windows -> MacOS
+
+/// A percentage floor.
+let ovr line branch reason platform : Override =
+    {
+        Line = line
+        Branch = branch
+        Reason = reason
+        Platform = platform
+    }

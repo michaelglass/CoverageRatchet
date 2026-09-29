@@ -477,17 +477,7 @@ let private configWithFooFloor (configPath: string) (line: float) (reason: strin
     saveConfig
         configPath
         { defaultsConfig with
-            Overrides =
-                Map.ofList
-                    [
-                        "Foo.fs",
-                        {
-                            Line = line
-                            Branch = 100.0
-                            Reason = reason
-                            Platform = None
-                        }
-                    ]
+            Overrides = Map.ofList [ "Foo.fs", ovr line 100.0 reason None ]
         }
 
 [<Fact>]
@@ -3044,6 +3034,13 @@ let private loosenReport =
             "Fine.fs", 10, 10
         ]
 
+/// `document` with the floor `loosen` adds for New.fs appended after Lowered.fs.
+let private withNewFloor (document: string) =
+    document.Replace(
+        "      \"reason\": \"was 90\"\n    }\n",
+        "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
+    )
+
 let private withLoosenFixture (action: string -> string -> unit) =
     withTempDir (fun tmpDir ->
         File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), loosenReport)
@@ -3058,15 +3055,11 @@ let ``runScoped - loosen lowers and adds floors for failing files and leaves eve
             withCapturedConsole (fun () -> runScoped [] (Loosen(config = Some configPath)) tmpDir false)
 
         let expected =
-            loosenDocument
-                .Replace(
-                    "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
-                    "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
-                )
-                .Replace(
-                    "      \"reason\": \"was 90\"\n    }\n",
-                    "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
-                )
+            loosenDocument.Replace(
+                "\"line\": 90,\n      \"branch\": 100,\n      \"reason\": \"was 90\"",
+                "\"line\": 70,\n      \"branch\": 100,\n      \"reason\": \"was 90\""
+            )
+            |> withNewFloor
 
         test <@ result = Ok 0 @>
         test <@ File.ReadAllText(configPath) = expected @>
@@ -3089,14 +3082,8 @@ let ``runScoped - loosen --file changes only the named failing file`` () =
     withLoosenFixture (fun tmpDir configPath ->
         let result = runScoped [ "New.fs" ] (Loosen(config = Some configPath)) tmpDir false
 
-        let expected =
-            loosenDocument.Replace(
-                "      \"reason\": \"was 90\"\n    }\n",
-                "      \"reason\": \"was 90\"\n    },\n    \"New.fs\": {\n      \"line\": 50,\n      \"branch\": 100,\n      \"reason\": \"loosened automatically\"\n    }\n"
-            )
-
         test <@ result = Ok 0 @>
-        test <@ File.ReadAllText(configPath) = expected @>)
+        test <@ File.ReadAllText(configPath) = withNewFloor loosenDocument @>)
 
 [<Fact>]
 let ``runScoped - loosen --file on a passing file changes nothing`` () =
