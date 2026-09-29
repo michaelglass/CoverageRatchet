@@ -1,0 +1,14 @@
+{
+  "packages": [
+    {
+      "name": "CoverageRatchet",
+      "fsproj": "src/CoverageRatchet/CoverageRatchet.fsproj",
+      "tagPrefix": "coverageratchet-v"
+    },
+    {
+      "name": "CoverageRatchet.Core",
+      "fsproj": "src/CoverageRatchet.Core/CoverageRatchet.Core.fsproj",
+      "tagPrefix": "coverageratchet-core-v"
+    }
+  ]
+}

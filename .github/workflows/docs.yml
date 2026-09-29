@@ -1,0 +1,32 @@
+name: Deploy Docs
+on:
+  push:
+    tags:
+      - 'coverageratchet-v*'
+      - 'coverageratchet-core-v*'
+
+concurrency:
+  # A constant group, NOT one keyed on the commit/tag: the point is to serialise
+  # GitHub Pages deployments against each other, and every push has a distinct
+  # sha, so a sha-scoped group can never collide with anything and serialises
+  # nothing. With one group, a newer tag's docs supersede an in-flight build.
+  group: docs
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  docs:
+    # Prereleases do not publish docs. The leading hyphen matters: it anchors the
+    # match to the SemVer prerelease separator, so `v1.0.0-alpha.1` is skipped.
+    if: "!contains(github.ref, '-alpha') && !contains(github.ref, '-beta') && !contains(github.ref, '-rc')"
+    uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-docs.yml@main
+    with:
+      fsdocs-parameters: "--parameters root /CoverageRatchet/"
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

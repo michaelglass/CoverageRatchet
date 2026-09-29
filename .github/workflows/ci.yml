@@ -1,0 +1,41 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Run CI (including the Windows job) on any branch: gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  build:
+    uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-build.yml@main
+    with:
+      solution: CoverageRatchet.slnx
+      # Keep in step with global.json: branch counts differ per SDK band, so
+      # re-measure the coverage floors when you move it.
+      dotnet-version: '10.0.4xx'
+      test-windows: true
+      fantomas-paths: "src/ tests/"
+      # Dogfood: the ratchet step runs this repo's own CoverageRatchet from source.
+      coverageratchet-cmd: "dotnet run --project $GITHUB_WORKSPACE/src/CoverageRatchet/CoverageRatchet.fsproj --"
+      # Reusable-workflow inputs are validated by GitHub: passing a name the
+      # called workflow does not declare fails the run before anything compiles.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+  # The project linter runs as its own JOB, not only as a mise task. A gate that
+  # lives only in the task runner is not on the path CI executes.
+  lint-project:
+    uses: michaelglass/MichaelsWackyFsPackageTools/.github/workflows/michaels-wacky-lint-project.yml@main
+    with:
+      dotnet-version: '10.0.4xx'
+    permissions:
+      contents: read

@@ -19,7 +19,7 @@
     <Authors>michaelglass</Authors>
     <Description>Per-file coverage enforcement with automatic threshold ratcheting from Cobertura XML</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/michaelglass/MichaelsWackyFsPackageTools</RepositoryUrl>
+    <RepositoryUrl>https://github.com/michaelglass/CoverageRatchet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>coverage;testing;cobertura;ratchet</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

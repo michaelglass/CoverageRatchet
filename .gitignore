@@ -1,0 +1,12 @@
+bin/
+obj/
+output/
+artifacts/
+coverage/
+TestResults/
+.fsdocs/
+.fshw/
+/coverage-thresholds-*.json
+
+# Claude
+.claude/settings.local.json

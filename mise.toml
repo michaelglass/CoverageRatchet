@@ -1,0 +1,190 @@
+[tools]
+# Pin the SDK band. Branch coverage counts differ per SDK feature band (the F#
+# compiler in 10.0.3xx and 10.0.4xx emits different branch points for identical
+# code), so the local gate, global.json and CI's `dotnet-version` must agree.
+dotnet = "10.0.400"
+
+# This repo dogfoods CoverageRatchet from source: every coverageratchet
+# invocation below is `dotnet run --project .../src/CoverageRatchet/... --no-build`,
+# never the published tool, so a change is gated by the code it ships.
+
+[tasks.tool-restore]
+description = "Restore the local dotnet tools"
+run = "dotnet tool restore"
+
+[tasks.restore]
+description = "Restore NuGet packages"
+run = "dotnet restore CoverageRatchet.slnx"
+
+[tasks.build]
+description = "Build the solution"
+run = "dotnet build CoverageRatchet.slnx"
+depends = ["tool-restore", "restore"]
+
+[tasks.test]
+description = "Run tests"
+run = "dotnet test --solution CoverageRatchet.slnx --no-build"
+depends = ["build"]
+
+[tasks.test-coverage]
+description = "Run each test project and emit cobertura where the coverage ratchet reads it"
+# One coverage directory per test project, named after the project folder minus
+# ".Tests", and one coverage-ratchet-<name>.json per coverage directory. CI derives
+# the same names.
+run = """
+for proj in $(find tests -name '*.Tests.fsproj' | sort); do
+  project_name=$(basename "$(dirname "$proj")" | sed 's/\\.Tests$//')
+  echo "Testing $proj (coverage -> coverage/$project_name/)"
+  dotnet test --project "$proj" --no-build \
+    --coverage \
+    --coverage-output-format cobertura \
+    --coverage-output "$PWD/coverage/$project_name/coverage.cobertura.xml"
+done
+"""
+depends = ["build"]
+
+[tasks.coverage-check]
+description = "Check per-file coverage against each coverage-ratchet-*.json"
+run = """
+for config in coverage-ratchet-*.json; do
+  project=$(echo "$config" | sed 's/coverage-ratchet-\\(.*\\)\\.json/\\1/')
+  echo "Checking $project..."
+  (cd "coverage/$project" && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- check "../../$config")
+done
+"""
+depends = ["test-coverage"]
+
+[tasks.coverage-ratchet]
+description = "Tighten the coverage floors to current values"
+run = """
+for config in coverage-ratchet-*.json; do
+  project=$(echo "$config" | sed 's/coverage-ratchet-\\(.*\\)\\.json/\\1/')
+  echo "Ratcheting $project..."
+  (cd "coverage/$project" && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- ratchet "../../$config")
+done
+"""
+depends = ["test-coverage"]
+
+[tasks.coverage-loosen]
+description = "Add floors for this platform from current coverage (a file with no entry defaults to 100%/100%)"
+run = """
+for config in coverage-ratchet-*.json; do
+  project=$(echo "$config" | sed 's/coverage-ratchet-\\(.*\\)\\.json/\\1/')
+  echo "Loosening $project..."
+  (cd "coverage/$project" && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- loosen "../../$config")
+done
+"""
+depends = ["test-coverage"]
+
+[tasks.coverage-baseline-lines]
+description = "Record each file's current covered-LINE COUNT as a floor (bootstrap AND deliberate re-baseline)"
+run = """
+for config in coverage-ratchet-*.json; do
+  project=$(echo "$config" | sed 's/coverage-ratchet-\\(.*\\)\\.json/\\1/')
+  echo "Baselining line counts for $project..."
+  (cd "coverage/$project" && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- baseline-lines "../../$config")
+done
+"""
+depends = ["test-coverage"]
+
+[tasks.loosen-from-ci]
+description = "Integrate the CI platform's floors from the latest CI run's coverage-thresholds artifact"
+run = """
+for config in coverage-ratchet-*.json; do
+  project=$(echo "$config" | sed 's/coverage-ratchet-\\(.*\\)\\.json/\\1/')
+  echo "Loosening from CI $project..."
+  (cd "coverage/$project" && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- loosen-from-ci "../../$config")
+done
+"""
+depends = ["test-coverage"]
+
+[tasks.format]
+description = "Format with Fantomas"
+run = "dotnet fantomas src/ tests/"
+depends = ["tool-restore"]
+
+[tasks.format-check]
+description = "Check formatting without rewriting"
+run = "dotnet fantomas --check src/ tests/"
+depends = ["tool-restore"]
+
+[tasks.lint]
+description = "Run FSharpLint"
+run = "dotnet fsharplint lint CoverageRatchet.slnx"
+depends = ["build"]
+
+[tasks.lint-project]
+description = "Lint repo + fsproj structure for NuGet OSS readiness (the same tool CI's lint-project job runs)"
+run = "dotnet tool run fsprojlint"
+depends = ["tool-restore"]
+
+[tasks.sync-docs]
+description = "Sync README sections into docs/ (README.md -> docs/index.md, src/<Pkg>/README.md -> docs/<Pkg>/index.md)"
+run = "dotnet tool run syncdocs sync"
+depends = ["tool-restore"]
+
+[tasks.sync-docs-check]
+description = "Fail if docs/ is out of sync with the READMEs"
+run = "dotnet tool run syncdocs check"
+depends = ["tool-restore"]
+
+[tasks.docs]
+description = "Generate API documentation"
+run = "dotnet fsdocs build --output output/docs --clean --parameters root /CoverageRatchet/"
+depends = ["build"]
+
+[tasks.check]
+description = "Run all checks with auto-fix"
+depends = ["format", "sync-docs", "lint", "lint-project", "coverage-check", "docs"]
+
+[tasks.ci]
+description = "Run every check CI runs, in CI's order, with no auto-fix"
+# Keep this in step with .github/workflows/ci.yml and the reusable
+# michaels-wacky-build.yml it calls (plus the lint-project job). A local `ci` that
+# runs a different set from real CI can go green on work CI will reject.
+run = [
+  "dotnet tool restore",
+  "dotnet restore CoverageRatchet.slnx",
+  "dotnet fantomas src/ tests/ --check",
+  "dotnet tool run syncdocs check",
+  "dotnet build CoverageRatchet.slnx --warnaserror --no-restore",
+  "dotnet fsharplint lint CoverageRatchet.slnx",
+  "dotnet fsdocs build --output output/docs --clean",
+  'dotnet test --project tests/CoverageRatchet.Core.Tests/CoverageRatchet.Core.Tests.fsproj --no-build --no-restore --coverage --coverage-output-format cobertura --coverage-output "$PWD/coverage/CoverageRatchet.Core/coverage.cobertura.xml"',
+  'dotnet test --project tests/CoverageRatchet.Tests/CoverageRatchet.Tests.fsproj --no-build --no-restore --coverage --coverage-output-format cobertura --coverage-output "$PWD/coverage/CoverageRatchet/coverage.cobertura.xml"',
+  '(cd coverage/CoverageRatchet && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- check "../../coverage-ratchet-CoverageRatchet.json")',
+  '(cd coverage/CoverageRatchet.Core && dotnet run --project ../../src/CoverageRatchet/CoverageRatchet.fsproj --no-build -- check "../../coverage-ratchet-CoverageRatchet.Core.json")',
+  "dotnet tool run fsprojlint",
+]
+
+[tasks.pack]
+description = "Create the NuGet packages (RefStamp suffixes a local pack with the jj/git source ref)"
+run = """
+dotnet pack src/CoverageRatchet/CoverageRatchet.fsproj -c Release -o artifacts/
+dotnet pack src/CoverageRatchet.Core/CoverageRatchet.Core.fsproj -c Release -o artifacts/
+"""
+depends = ["tool-restore"]
+
+# A release must not be cuttable unless the LOCAL gate is green. `ci` — not
+# `build` — because `ci` is the only gate that sees the macOS coverage floors:
+# GitHub CI's coverage job is linux-only and CoverageRatchet selects the override
+# for the current platform.
+[tasks.release]
+description = "Tag a release per changed package; the bump level is derived from the public API diff"
+run = "dotnet tool run fssemantictagger release"
+depends = ["ci"]
+
+[tasks.release-alpha]
+description = "Start a new alpha pre-release cycle"
+run = "dotnet tool run fssemantictagger alpha"
+depends = ["ci"]
+
+[tasks.release-dry-run]
+description = "Preview a release without mutating (no tag, no publish)"
+run = "dotnet tool run fssemantictagger release --dry-run"
+depends = ["tool-restore"]
+
+[tasks.changelog-check]
+description = "Fail if a changed package's '## Unreleased' CHANGELOG section cannot support a release"
+run = "dotnet tool run fssemantictagger release --check"
+depends = ["tool-restore"]

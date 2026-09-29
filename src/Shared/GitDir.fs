@@ -1,8 +1,10 @@
-/// Shared between the CoverageRatchet and FsSemanticTagger tools via linked
-/// <Compile Include="../Shared/GitDir.fs" Link="GitDir.fs" /> items, so the two
-/// tools cannot drift. It is intentionally NOT its own project: adding a project
-/// would alter each tool's ProjectReference closure and change what
-/// FsSemanticTagger bundles at release time.
+// This file is a copy of the same file in michaelglass/MichaelsWackyFsPackageTools
+// (src/Shared/, used there by FsSemanticTagger and FsProjLint). If the two copies
+// drift, consider sharing them via a Paket GitHub file dependency instead of copying.
+/// Compiled into CoverageRatchet via a linked
+/// <Compile Include="../Shared/GitDir.fs" Link="GitDir.fs" /> item. It is
+/// intentionally NOT its own project: adding a project would alter the tool's
+/// ProjectReference closure and change what it bundles at release time.
 module Shared.GitDir
 
 open System.IO

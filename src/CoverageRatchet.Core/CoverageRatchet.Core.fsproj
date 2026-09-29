@@ -14,7 +14,7 @@
     <Authors>michaelglass</Authors>
     <Description>Cobertura XML parsing, threshold checking, and ratcheting — library form of CoverageRatchet</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/michaelglass/MichaelsWackyFsPackageTools</RepositoryUrl>
+    <RepositoryUrl>https://github.com/michaelglass/CoverageRatchet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>coverage;testing;cobertura;ratchet</PackageTags>
     <IncludeSymbols>true</IncludeSymbols>
