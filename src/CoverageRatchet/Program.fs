@@ -55,18 +55,43 @@ type Command =
         runId: string *
         output: string option
 
+[<Literal>]
+let private searchDirDescription =
+    "directory to scan for coverage.cobertura.xml (default: current directory; recursive)"
+
+[<Literal>]
+let private mergeBaselinesDescription =
+    "before reading coverage, merge each coverage.cobertura.xml onto its sibling coverage.baseline.xml "
+    + "(max hits per line) so partial test runs cannot lower the ratchet. Bootstraps a baseline on first use."
+
 /// Flags accepted before or after the command.
 [<RequireQualifiedAccess>]
 type GlobalFlag =
     | [<CmdFlag(Repeatable = true, Description = "(baseline-lines only) re-baseline only this file's count floor")>] File of
         name: string
+    | [<CmdFlag(Description = searchDirDescription)>] SearchDir of path: string
+    | [<CmdFlag(Description = mergeBaselinesDescription)>] MergeBaselines
 
-/// Parses argv into the `--file` scope and the command.
+/// Parses argv into the global flags and the command.
 let cliSpec =
     CommandReflection.fromUnionWithGlobals<Command, GlobalFlag> "Per-file coverage enforcement that only goes up"
 
 let fileScopeOf (globals: GlobalFlag list) : string list =
-    globals |> List.map (fun (GlobalFlag.File name) -> name)
+    globals
+    |> List.choose (function
+        | GlobalFlag.File name -> Some name
+        | _ -> None)
+
+/// The `--search-dir` value, or the current directory when absent.
+let searchDirOf (globals: GlobalFlag list) : string =
+    globals
+    |> List.tryPick (function
+        | GlobalFlag.SearchDir path -> Some path
+        | _ -> None)
+    |> Option.defaultValue "."
+
+let mergeBaselinesOf (globals: GlobalFlag list) : bool =
+    globals |> List.contains GlobalFlag.MergeBaselines
 
 let formatFileResult (r: FileResult) =
     let branchStr =
@@ -792,19 +817,6 @@ let runScoped
 let run (command: Command) (searchDir: string) (mergeBaselines: bool) : Result<int, string> =
     runScoped [] command searchDir mergeBaselines
 
-let extractFlags (argv: string array) : string * bool * string array =
-    let rec loop i searchDir mergeBaselines remaining =
-        if i >= argv.Length then
-            searchDir, mergeBaselines, Array.ofList (List.rev remaining)
-        elif argv.[i] = "--search-dir" && i + 1 < argv.Length then
-            loop (i + 2) argv.[i + 1] mergeBaselines remaining
-        elif argv.[i] = "--merge-baselines" then
-            loop (i + 1) searchDir true remaining
-        else
-            loop (i + 1) searchDir mergeBaselines (argv.[i] :: remaining)
-
-    loop 0 "." false []
-
 let private subcommandExtras (path: string list) : string option =
     match path with
     | [ "ratchet" ] ->
@@ -950,15 +962,6 @@ deleted tests drop out of subsequent merged runs.
 
 let private rootHelpExtras =
     """
-Global flags (can appear anywhere):
-  --search-dir <path>   directory to scan for coverage.cobertura.xml
-                        (default: current directory; recursive)
-  --merge-baselines     before reading coverage, merge each
-                        coverage.cobertura.xml onto its sibling
-                        coverage.baseline.xml (max hits per line) so
-                        partial test runs cannot lower the ratchet.
-                        Bootstraps a baseline on first use.
-
 Config file format (default: coverage-ratchet.json):
   {
     "includedExtensions": [".fs"],
@@ -1004,13 +1007,21 @@ Examples:
 Run 'coverageratchet <command> --help' for command-specific details.
 """
 
+/// `cliSpec.Parse`, except argv holding only global flags runs the default command.
+/// CommandTree 0.11.3 cannot run a default command that takes arguments when argv
+/// names no command, so name it explicitly; drop this once that CommandTree fix ships.
+let parseArgv (argv: string array) : Result<GlobalFlag list * Command, ParseError> =
+    match cliSpec.Parse argv with
+    | Error(InvalidArguments(_, "Default command requires no arguments")) ->
+        cliSpec.Parse(Array.append [| "ratchet" |] argv)
+    | parsed -> parsed
+
 let private normalizeHelpFlags (argv: string array) : string array =
     argv |> Array.map (fun a -> if a = "-h" || a = "help" then "--help" else a)
 
 [<EntryPoint>]
 let main argv =
     let argv = normalizeHelpFlags argv
-    let searchDir, mergeBaselines, argv = extractFlags argv
     let tree = cliSpec.Tree
 
     let printHelp (path: string list) =
@@ -1024,8 +1035,8 @@ let main argv =
             | Some extras -> printfn "%s" extras
             | None -> ()
 
-    let runOrReport fileScope cmd =
-        match runScoped fileScope cmd searchDir mergeBaselines with
+    let runOrReport (globals: GlobalFlag list) cmd =
+        match runScoped (fileScopeOf globals) cmd (searchDirOf globals) (mergeBaselinesOf globals) with
         | Ok exitCode -> exitCode
         | Error msg ->
             eprintfn "Error: %s" msg
@@ -1034,8 +1045,8 @@ let main argv =
     if Array.isEmpty argv then
         runOrReport [] (Ratchet None)
     else
-        match cliSpec.Parse argv with
-        | Ok(globals, cmd) -> runOrReport (fileScopeOf globals) cmd
+        match parseArgv argv with
+        | Ok(globals, cmd) -> runOrReport globals cmd
         | Error(HelpRequested path) ->
             printHelp path
             0

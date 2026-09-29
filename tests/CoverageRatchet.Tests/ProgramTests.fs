@@ -1546,60 +1546,94 @@ let ``vcsCommitAndPush - jj fails falls back to git workflow`` () =
     test <@ calls |> List.exists (fun (c, _) -> c = "git") @>
     test <@ calls |> List.exists (fun (_, a) -> a.Contains "commit") @>
 
-[<Fact>]
-let ``extractFlags - defaults to dot when not provided`` () =
-    let dir, mergeBaselines, remaining = extractFlags [| "check" |]
-    test <@ dir = "." @>
-    test <@ mergeBaselines = false @>
-    test <@ remaining = [| "check" |] @>
+let private parseGlobals (argv: string array) =
+    parseArgv argv
+    |> Result.map (fun (globals, cmd) -> searchDirOf globals, mergeBaselinesOf globals, cmd)
 
 [<Fact>]
-let ``extractFlags - extracts search-dir before command`` () =
-    let dir, mergeBaselines, remaining =
-        extractFlags [| "--search-dir"; "coverage"; "check" |]
-
-    test <@ dir = "coverage" @>
-    test <@ mergeBaselines = false @>
-    test <@ remaining = [| "check" |] @>
+let ``--search-dir - defaults to dot when not provided`` () =
+    test <@ parseGlobals [| "check" |] = Ok(".", false, Check None) @>
 
 [<Fact>]
-let ``extractFlags - extracts search-dir after command`` () =
-    let dir, mergeBaselines, remaining =
-        extractFlags [| "check"; "--search-dir"; "coverage" |]
-
-    test <@ dir = "coverage" @>
-    test <@ mergeBaselines = false @>
-    test <@ remaining = [| "check" |] @>
+let ``--search-dir - before the command`` () =
+    test <@ parseGlobals [| "--search-dir"; "coverage"; "check" |] = Ok("coverage", false, Check None) @>
 
 [<Fact>]
-let ``extractFlags - ignores search-dir without value`` () =
-    let dir, mergeBaselines, remaining = extractFlags [| "check"; "--search-dir" |]
-    test <@ dir = "." @>
-    test <@ mergeBaselines = false @>
-    test <@ remaining = [| "check"; "--search-dir" |] @>
+let ``--search-dir - after the command`` () =
+    test <@ parseGlobals [| "check"; "--search-dir"; "coverage" |] = Ok("coverage", false, Check None) @>
 
 [<Fact>]
-let ``extractFlags - empty argv`` () =
-    let dir, mergeBaselines, remaining = extractFlags Array.empty
-    test <@ dir = "." @>
-    test <@ mergeBaselines = false @>
-    test <@ remaining = Array.empty @>
+let ``--search-dir - after the command's positional config`` () =
+    test
+        <@
+            parseGlobals [| "check"; "c.json"; "--search-dir"; "coverage" |] =
+                Ok("coverage", false, Check(Some "c.json"))
+        @>
 
 [<Fact>]
-let ``extractFlags - extracts merge-baselines flag`` () =
-    let dir, mergeBaselines, remaining = extractFlags [| "check"; "--merge-baselines" |]
-    test <@ dir = "." @>
-    test <@ mergeBaselines = true @>
-    test <@ remaining = [| "check" |] @>
+let ``--search-dir - accepts the =value form`` () =
+    test <@ parseGlobals [| "check"; "--search-dir=coverage" |] = Ok("coverage", false, Check None) @>
 
 [<Fact>]
-let ``extractFlags - search-dir and merge-baselines combined`` () =
-    let dir, mergeBaselines, remaining =
-        extractFlags [| "--search-dir"; "coverage"; "check"; "--merge-baselines" |]
+let ``--search-dir - a trailing --search-dir with no value is rejected, not read as a positional`` () =
+    match cliSpec.Parse [| "check"; "--search-dir" |] with
+    | Error(InvalidArguments(_, msg)) -> test <@ msg.Contains("--search-dir") && msg.Contains("requires a value") @>
+    | other -> failwithf "expected a missing-value error, got %A" other
 
-    test <@ dir = "coverage" @>
-    test <@ mergeBaselines = true @>
-    test <@ remaining = [| "check" |] @>
+[<Fact>]
+let ``main - a trailing --search-dir with no value exits 1`` () =
+    test <@ main [| "check"; "--search-dir" |] = 1 @>
+
+[<Fact>]
+let ``--search-dir - globals only runs the default command`` () =
+    test <@ parseGlobals [| "--search-dir"; "coverage" |] = Ok("coverage", false, Ratchet None) @>
+
+[<Fact>]
+let ``--merge-baselines - absent is false`` () =
+    test <@ parseGlobals [| "ratchet" |] = Ok(".", false, Ratchet None) @>
+
+[<Fact>]
+let ``--merge-baselines - after the command`` () =
+    test <@ parseGlobals [| "check"; "--merge-baselines" |] = Ok(".", true, Check None) @>
+
+[<Fact>]
+let ``--merge-baselines - before the command`` () =
+    test <@ parseGlobals [| "--merge-baselines"; "check" |] = Ok(".", true, Check None) @>
+
+[<Fact>]
+let ``--search-dir and --merge-baselines - combined around the command`` () =
+    test
+        <@
+            parseGlobals [| "--search-dir"; "coverage"; "check"; "--merge-baselines" |] =
+                Ok("coverage", true, Check None)
+        @>
+
+[<Fact>]
+let ``global flags - tokens after -- are not consumed as flags`` () =
+    // After `--` a flag-looking token belongs to the command: it is never applied as a
+    // global flag and never swallows the next token as its value.
+    let notAppliedAsFlag argv =
+        match parseArgv argv with
+        | Ok(globals, _) -> searchDirOf globals = "." && not (mergeBaselinesOf globals)
+        | Error _ -> true
+
+    test <@ notAppliedAsFlag [| "check"; "--"; "--merge-baselines" |] @>
+    test <@ notAppliedAsFlag [| "check"; "--"; "--search-dir"; "coverage" |] @>
+    test <@ main [| "check"; "--"; "--merge-baselines" |] = 1 @>
+
+[<Fact>]
+let ``global flags - only global flags runs the default ratchet`` () =
+    test <@ parseGlobals [| "--merge-baselines" |] = Ok(".", true, Ratchet None) @>
+    test <@ parseGlobals [| "--search-dir=coverage"; "--merge-baselines" |] = Ok("coverage", true, Ratchet None) @>
+
+[<Fact>]
+let ``global flags - root help lists --search-dir and --merge-baselines once`` () =
+    let help =
+        CommandTree.helpWithGlobals cliSpec.Tree cliSpec.GlobalFlags "coverageratchet"
+
+    let count (needle: string) = help.Split(needle).Length - 1
+
+    test <@ count "--search-dir" = 1 && count "--merge-baselines" = 1 @>
 
 [<Fact>]
 let ``runLoosenFromCi - CI passes returns 0`` () =
@@ -2704,3 +2738,24 @@ let ``run - an invalid includedExtensions is an error and writes nothing`` () =
             @>
 
         test <@ File.ReadAllText(configPath) = document @>)
+
+[<Fact>]
+let ``main - --search-dir and --merge-baselines reach the command`` () =
+    withTempDir (fun tmpDir ->
+        let sub = Path.Combine(tmpDir, "proj")
+        Directory.CreateDirectory(sub) |> ignore
+        File.WriteAllText(Path.Combine(sub, "coverage.cobertura.xml"), makeCountCoverageXml [ "Zeta.fs", 7, 10 ])
+        let configPath = Path.Combine(tmpDir, "config.json")
+
+        test <@ main [| "--merge-baselines"; "loosen"; configPath; "--search-dir=" + tmpDir |] = 0 @>
+        // --merge-baselines bootstraps a baseline beside the report.
+        test <@ File.Exists(Path.Combine(sub, "coverage.baseline.xml")) @>)
+
+[<Fact>]
+let ``main - without --merge-baselines no baseline is written`` () =
+    withTempDir (fun tmpDir ->
+        File.WriteAllText(Path.Combine(tmpDir, "coverage.cobertura.xml"), makeCountCoverageXml [ "Zeta.fs", 7, 10 ])
+        let configPath = Path.Combine(tmpDir, "config.json")
+
+        test <@ main [| "loosen"; configPath; "--search-dir"; tmpDir |] = 0 @>
+        test <@ not (File.Exists(Path.Combine(tmpDir, "coverage.baseline.xml"))) @>)
