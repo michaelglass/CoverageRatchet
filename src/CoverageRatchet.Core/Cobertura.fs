@@ -202,6 +202,10 @@ type Report =
     {
         Lines: RawLine list
         Excluded: ExcludedFile list
+        /// Each read file's base name, and every path the reports recorded it under,
+        /// as they recorded it. What a check that reads the source (a branch exemption's
+        /// anchor) reads it from.
+        Sources: Map<string, string list>
     }
 
 let private readClassLines (baseName: string) (classEl: XElement) : RawLine list =
@@ -266,17 +270,27 @@ let readReports (options: ReaderOptions) (xmlContents: string list) : Report =
             doc.Root.Descendants(doc.Root.Name.Namespace + "class")
             |> Seq.choose (fun classEl ->
                 let fn = classEl.Attribute(XName.Get("filename"))
-                if isNull fn then None else Some(segments fn.Value, classEl))
+
+                if isNull fn then
+                    None
+                else
+                    Some(fn.Value, segments fn.Value, classEl))
             |> Seq.toList)
-        |> List.partitionWith (fun (path, classEl) ->
+        |> List.partitionWith (fun (recorded, path, classEl) ->
             let baseName = Array.tryLast path |> Option.defaultValue ""
 
             match classify options root baseName path with
-            | None -> Choice1Of2(readClassLines baseName classEl)
+            | None -> Choice1Of2(baseName, recorded, readClassLines baseName classEl)
             | Some reason -> Choice2Of2 { FileName = baseName; Reason = reason })
 
     {
-        Lines = List.concat lines
+        Lines = lines |> List.collect (fun (_, _, read) -> read)
+        Sources =
+            lines
+            |> List.map (fun (baseName, recorded, _) -> baseName, recorded)
+            |> List.groupBy fst
+            |> List.map (fun (baseName, paths) -> baseName, paths |> List.map snd |> List.distinct)
+            |> Map.ofList
         Excluded =
             excluded
             |> List.distinctBy (fun e -> e.FileName)
@@ -287,25 +301,36 @@ let readReports (options: ReaderOptions) (xmlContents: string list) : Report =
 let extractRawLines (xmlContent: string) : RawLine list =
     (readReports ReaderOptions.defaults [ xmlContent ]).Lines
 
+/// Each line's branch point as one file's reports merge it: `(covered, total)` arms, from
+/// the report that covered the larger share of that line (on equal shares, the first).
+/// Lines with no branch arm are absent. The one merge rule `buildCoverage` and a branch
+/// exemption read lines by.
+let branchPointsOf (entries: RawLine list) : Map<int, int * int> =
+    let branchMap = System.Collections.Generic.Dictionary<int, int * int>()
+
+    for r in entries do
+        if r.LineNum >= 0 && r.BrTotal > 0 then
+            match branchMap.TryGetValue(r.LineNum) with
+            | true, (existingC, existingT) ->
+                if r.BrCovered * existingT > existingC * r.BrTotal then
+                    branchMap.[r.LineNum] <- (r.BrCovered, r.BrTotal)
+            | false, _ -> branchMap.[r.LineNum] <- (r.BrCovered, r.BrTotal)
+
+    branchMap |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
+
 /// Build FileCoverage list from raw line data.
 let buildCoverage (rawLines: RawLine list) : FileCoverage list =
     rawLines
     |> List.groupBy (fun r -> r.FileName)
     |> List.map (fun (fileName, entries) ->
         let lineMap = System.Collections.Generic.Dictionary<int, bool>()
-        let branchMap = System.Collections.Generic.Dictionary<int, int * int>()
 
         for r in entries |> List.filter (fun r -> r.LineNum >= 0) do
             match lineMap.TryGetValue(r.LineNum) with
             | true, existing -> lineMap.[r.LineNum] <- existing || r.WasHit
             | false, _ -> lineMap.[r.LineNum] <- r.WasHit
 
-            if r.BrTotal > 0 then
-                match branchMap.TryGetValue(r.LineNum) with
-                | true, (existingC, existingT) ->
-                    if r.BrCovered * existingT > existingC * r.BrTotal then
-                        branchMap.[r.LineNum] <- (r.BrCovered, r.BrTotal)
-                | false, _ -> branchMap.[r.LineNum] <- (r.BrCovered, r.BrTotal)
+        let branchMap = branchPointsOf entries
 
         let totalLines = lineMap.Count
         let coveredLines = lineMap.Values |> Seq.filter id |> Seq.length
