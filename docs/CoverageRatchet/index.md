@@ -406,10 +406,40 @@ CoverageRatchet uses a JSON config file (default: `coverage-ratchet.json` in the
 | `countFloors.<file>.coveredBranches` | number | Minimum **number of covered branches** — a count, not a percentage |
 | `countFloors.<file>.reason` | string | Why this file's floor sits where it does |
 | `countFloors.<file>.platform` | string | Optional: `"macos"`, `"linux"`, or `"windows"`. Resolved the same way as for `overrides`, but **no command writes one** — see below |
+| `branchExemptions` | object | Per-file lists of **known-unreachable branch points**, keyed by filename — see [Branch exemptions](#branch-exemptions) |
+| `branchExemptions.<file>[].line` | number | The branch point's 1-based source line |
+| `branchExemptions.<file>[].arms` | number | How many of its arms may go uncovered (at least 1) |
+| `branchExemptions.<file>[].anchor` | string | Text the line must hold; a line that no longer holds it is a stale exemption |
+| `branchExemptions.<file>[].reason` | string | Required: why the arms cannot be reached |
+| `branchExemptions.<file>[].platform` | string | Optional: `"macos"`, `"linux"`, or `"windows"`; every entry for the running platform or none applies |
 
 Files not listed in `overrides` must have 100% line and branch coverage.
 
 Files not listed in `countFloors` have **no** count floor — counts are opt-in per file, added by `baseline-lines`.
+
+### Branch exemptions
+
+Some branch arms cannot be reached deterministically: on Linux every `let!`/`do!` in an F# `task` is a branch on whether the awaited task had already finished, and the finished arm of an await on work another thread publishes later is essentially never taken. Rather than lowering a file's percentage to absorb such an arm, name it, so the floor can stay at "all reachable branches covered":
+
+```json
+"overrides": { "DebouncedWork.fs": { "line": 97, "branch": 100 } },
+"branchExemptions": {
+  "DebouncedWork.fs": [
+    { "line": 104, "arms": 1, "platform": "linux",
+      "anchor": "let! admitted = worker.SubmitAsync",
+      "reason": "the already-finished arm of an await on a store change" }
+  ]
+}
+```
+
+Every command that judges or writes a floor (`check`, `check-json`, `ratchet`, `loosen`, `baseline-lines`, `targets`) reads each file's branches with its exempted uncovered arms out of the denominator; an exempted arm a run does cover still counts as covered, and uncovered arms beyond `arms` still count. `gaps` lists every branch point, exempted or not. An exemption is never applied silently when it no longer fits:
+
+| Exit code | Meaning |
+|-----------|---------|
+| 1 | A **stale** exemption: its line no longer holds its `anchor` (the message names the one line that now does, if any), has no branch point, or has fewer arms than it exempts |
+| 2 | Exemptions on a file whose source cannot be read here (a report measured on another machine), so no anchor can be checked: the run cannot answer |
+
+Only files the report measured are checked, so a partial run is not refused for an exempted file it did not run. No command writes this section; the floor writer leaves it byte for byte as it is.
 
 **A platform-tagged count floor starts by hand.** `baseline-lines` writes a file's first floor platform-less, and there is no `loosen-from-ci` equivalent for counts: the `coverage-thresholds` artifact carries percentages only. This is deliberate — a floor tagged `macos` is invisible to a Linux-only CI, so nothing tags one on your behalf. Once a file carries a platform-tagged floor (say a `linux` count captured from CI), `baseline-lines` keeps the split: it updates the entry for the platform it ran on, adds one tagged with that platform if none exists, and never touches the other platforms' entries. Remember that every platform without an entry then has *no* count floor for that file, and that you are responsible for keeping a number you cannot measure locally up to date.
 

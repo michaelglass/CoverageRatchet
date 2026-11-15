@@ -31,6 +31,7 @@
     <Compile Include="Cobertura.fs" />
     <Compile Include="Merge.fs" />
     <Compile Include="Thresholds.fs" />
+    <Compile Include="Exemptions.fs" />
     <Compile Include="Ratchet.fs" />
   </ItemGroup>
 </Project>

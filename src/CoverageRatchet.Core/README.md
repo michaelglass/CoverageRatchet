@@ -357,6 +357,67 @@ Count floors gate on **383**, the number that held still. `checkCounts` enforces
 
 Baselined floors are written **platform-less**, so one baseline guards every platform. Nothing in this library synthesises a platform-tagged count floor: a floor tagged `macos` is invisible to a Linux-only CI, so tagging is left to whoever knows which platform measured the numbers.
 
+## Branch exemptions
+
+Some branch arms cannot be reached deterministically. On Linux every `let!`/`do!` in an F# `task` is a branch on whether the awaited task had already finished, and for an await on work another thread publishes after the caller suspends, the finished arm is essentially never taken. A file-wide percentage absorbs such an arm and then sits exactly at the worst case: the next one reds the check, and lowering the floor to absorb it also hides a reachable branch lost.
+
+`CoverageRatchet.Exemptions` takes known-unreachable arms out of a file's branch denominator by line, so a floor can read **"all reachable branches covered"** (`"branch": 100`):
+
+<!-- sync:branch-exemption:start src=src/CoverageRatchet.Core/Exemptions.fs -->
+```fsharp
+/// A known-unreachable branch point: up to `Arms` of the branch arms on `Line` may go
+/// uncovered without counting against the file, while `Line` holds `Anchor`.
+type BranchExemption =
+    {
+        /// The 1-based source line of the branch point.
+        Line: int
+        /// How many of its arms may go uncovered (at least 1).
+        Arms: int
+        /// Text the line must hold, so an exemption cannot follow a moved line silently.
+        Anchor: string
+        /// Why the arms cannot be reached. Required.
+        Reason: string
+        /// The platform it applies on; `None` applies on every platform.
+        Platform: Platform option
+    }
+```
+<!-- sync:branch-exemption:end -->
+
+`load path` reads them from the floor file's own `branchExemptions` section (`loadFor platform path` for a named platform). `coverageOf exemptions readSource report` is `buildCoverage` with each measured file's exempted uncovered arms out of its denominator: an exempted arm a run does cover still counts as covered, and uncovered arms beyond `Arms` still count against the file. `sourceReader root report` reads a file's source from the path its report recorded.
+
+Lines move, so an exemption that no longer describes its line is a hard error, and one that cannot be checked is a refusal, never a pass:
+
+<!-- sync:exemption-problems:start src=src/CoverageRatchet.Core/Exemptions.fs -->
+```fsharp
+/// Why an exemption no longer describes its line.
+type StaleReason =
+    /// The line has no branch point in the report: the exemption exempts nothing.
+    | NoBranchPoint
+    /// The exemption allows more uncovered arms than the line has.
+    | MoreArmsThanBranches of total: int
+    /// The line no longer holds the anchor; `movedTo` is the one other line that does.
+    | AnchorMissing of actual: string * movedTo: int option
+
+type StaleExemption =
+    {
+        File: string
+        Exemption: BranchExemption
+        Why: StaleReason
+    }
+
+/// Why a run's exemptions could not be applied.
+type Refusal =
+    /// Some exemptions no longer describe their lines (and, alongside, the files whose
+    /// source could not be read). Something a person changed: exit 1.
+    | Stale of stale: StaleExemption list * unsourced: string list
+    /// Exempted files whose source this machine cannot read, so no anchor can be checked.
+    /// The run cannot answer, which is not a pass: exit 2.
+    | Unsourced of files: string list
+```
+<!-- sync:exemption-problems:end -->
+
+`exitCodeOf` maps a refusal to `1` (stale: something a person changed) or `2` (unsourced: the run cannot answer), as `Thresholds.exitCodeOf` separates a fall from an unknown; `describe` gives one line per problem. Only files a report measured are checked, so a partial run is not refused for an exempted file it did not run. The floor writer (`saveRawConfig`) edits only `overrides` and `countFloors`, so the section survives every rewrite byte for byte.
+
 ## Configuration Format
 
 The JSON config (`coverage-ratchet.json`) used by `Thresholds` and `Ratchet`:
@@ -391,6 +452,18 @@ There are **two independent sections, and their numbers are not the same kind of
 > The keys differ precisely so the two can never be positionally confused, and they live in separate sections so a config written before count floors existed can never be reread as a set of counts. A config with no `countFloors` section enforces percentages exactly as it always did.
 
 `reason` and `platform` are accepted in both sections. Per-file entries can be a single object (platform-agnostic) or an array of platform-specific objects (`"macos"`, `"linux"`, `"windows"`).
+
+A third section, `branchExemptions`, names known-unreachable branch points (see [Branch exemptions](#branch-exemptions)). Each file maps to a list of `{ "line", "arms", "anchor", "reason", "platform"? }`; `line` and `arms` (both at least 1), a non-empty `anchor` and a non-empty `reason` are required, and every entry for the running platform or none applies:
+
+```json
+"branchExemptions": {
+  "DebouncedWork.fs": [
+    { "line": 104, "arms": 1, "platform": "linux",
+      "anchor": "let! admitted = worker.SubmitAsync",
+      "reason": "the already-finished arm of an await on a store change the pool writer publishes after the caller suspends" }
+  ]
+}
+```
 
 ## License
 

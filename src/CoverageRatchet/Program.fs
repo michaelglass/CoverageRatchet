@@ -738,18 +738,37 @@ type CoverageFileCommand =
     | CfTargets
     | CfGaps
 
-let private runWithCoverageFiles (cmd: CoverageFileCommand) (configPath: string) (report: Report) =
-    let files = buildCoverage report.Lines
+/// Run `cmd` over `report`'s coverage, each file's branch exemptions applied
+/// (`Exemptions.coverageOf`): every command that judges or writes a floor reads the same
+/// reachable-branch denominator. A stale exemption, or one whose source cannot be read
+/// here, stops the command with one line per problem and the refusal's exit code.
+/// `gaps` lists the raw branch points, exempted or not, so it reads the report as is.
+let private runWithCoverageFiles
+    (cmd: CoverageFileCommand)
+    (configPath: string)
+    (exemptions: Map<string, Exemptions.BranchExemption list>)
+    (report: Report)
+    =
+    let floorsDirectory = Some(Path.GetDirectoryName(Path.GetFullPath configPath))
+
+    let withFiles (run: FileCoverage list -> int) =
+        match Exemptions.coverageOf exemptions (Exemptions.sourceReader floorsDirectory report) report with
+        | Ok files -> run files
+        | Error refusal ->
+            for line in Exemptions.describe refusal do
+                printfn "%s" line
+
+            Exemptions.exitCodeOf refusal
 
     match cmd with
-    | CfRatchet -> runRatchet configPath files
-    | CfCheck -> runCheck configPath report.Excluded files
-    | CfLoosen scope -> runLoosen configPath scope files
-    | CfBaselineLines scope -> runBaselineLines configPath scope files
+    | CfRatchet -> withFiles (runRatchet configPath)
+    | CfCheck -> withFiles (runCheck configPath report.Excluded)
+    | CfLoosen scope -> withFiles (runLoosen configPath scope)
+    | CfBaselineLines scope -> withFiles (runBaselineLines configPath scope)
     | CfCheckJson outputOpt ->
         let outputPath = outputOpt |> Option.defaultValue "coverage-results.json"
-        runCheckJson configPath outputPath report.Excluded files
-    | CfTargets -> runTargets configPath report.Excluded files
+        withFiles (runCheckJson configPath outputPath report.Excluded)
+    | CfTargets -> withFiles (runTargets configPath report.Excluded)
     | CfGaps -> runGaps report.Lines
 
 /// What `command` does with the coverage report, or `None` for a command that reads
@@ -832,13 +851,14 @@ let runScoped
 
             let xmlPaths = findCoverageFiles searchDir
 
-            match loadReaderOptions configPath with
-            | Error message -> Error message
-            | Ok _ when List.isEmpty xmlPaths -> Error "No coverage.cobertura.xml found"
-            | Ok readerOptions ->
+            match loadReaderOptions configPath, Exemptions.load configPath with
+            | Error message, _
+            | _, Error message -> Error message
+            | Ok _, Ok _ when List.isEmpty xmlPaths -> Error "No coverage.cobertura.xml found"
+            | Ok readerOptions, Ok exemptions ->
                 let report = xmlPaths |> List.map File.ReadAllText |> readReports readerOptions
 
-                let result = runWithCoverageFiles cmd configPath report
+                let result = runWithCoverageFiles cmd configPath exemptions report
 
                 // After a full suite (FSHW_RAN_FULL_SUITE=true, set by fs-hot-watch),
                 // reset the baseline so hits from deleted tests drop out.

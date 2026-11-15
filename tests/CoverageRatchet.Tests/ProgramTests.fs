@@ -3108,3 +3108,71 @@ let ``runScoped - loosen --file names a file the report did not measure and refu
 [<Fact>]
 let ``--file - is accepted by loosen`` () =
     test <@ parseFileScope [| "loosen"; "--file"; "New.fs" |] = Ok([ "New.fs" ], Loosen None) @>
+
+// --- branch exemptions ----------------------------------------------------------------
+
+/// A source file `Queue.fs` whose line 10 awaits, a report measuring it from `recordedAt`
+/// with line 10 half covered, and a floor file exempting `exemption`.
+let private withExemptedRun (recordedAt: string -> string) (exemption: string) (body: string -> unit) =
+    withTempDir (fun tmpDir ->
+        let source = Path.Combine(tmpDir, "Queue.fs")
+
+        File.WriteAllLines(
+            source,
+            [
+                for n in 1..12 ->
+                    if n = 10 then
+                        "        let! admitted = worker.SubmitAsync(value)"
+                    else
+                        $"// line {n}"
+            ]
+        )
+
+        File.WriteAllText(
+            Path.Combine(tmpDir, "coverage.cobertura.xml"),
+            $"""<?xml version="1.0" encoding="utf-8"?>
+<coverage><packages><package><classes>
+<class filename="{recordedAt source}"><lines>
+<line number="1" hits="1" />
+<line number="10" hits="1" condition-coverage="50%% (1/2)" />
+</lines></class>
+</classes></package></packages></coverage>"""
+        )
+
+        File.WriteAllText(
+            Path.Combine(tmpDir, "config.json"),
+            $"""{{"branchExemptions": {{"Queue.fs": [ {exemption} ]}}}}"""
+        )
+
+        body tmpDir)
+
+let private exemptLine10 (anchor: string) =
+    $"""{{"line": 10, "arms": 1, "anchor": "{anchor}", "reason": "the already-finished arm of an await"}}"""
+
+let private checkIn (tmpDir: string) =
+    run (Check(config = Some(Path.Combine(tmpDir, "config.json")))) tmpDir false
+
+[<Fact>]
+let ``run - check passes a file whose only uncovered arm is exempted`` () =
+    withExemptedRun id (exemptLine10 "let! admitted") (fun tmpDir -> test <@ checkIn tmpDir = Ok 0 @>)
+
+[<Fact>]
+let ``run - check fails a stale exemption, naming it`` () =
+    withExemptedRun id (exemptLine10 "do! change") (fun tmpDir ->
+        let out, result = withCapturedConsole (fun () -> checkIn tmpDir)
+        test <@ result = Ok 1 @>
+        test <@ out.Contains "stale exemption Queue.fs:10" @>)
+
+[<Fact>]
+let ``run - check refuses exemptions whose source is not here`` () =
+    withExemptedRun (fun _ -> "/home/runner/work/repo/src/Queue.fs") (exemptLine10 "let! admitted") (fun tmpDir ->
+        let out, result = withCapturedConsole (fun () -> checkIn tmpDir)
+        test <@ result = Ok 2 @>
+        test <@ out.Contains "exemptions on Queue.fs not applied" @>)
+
+[<Fact>]
+let ``run - a malformed exemption is a configuration error`` () =
+    withExemptedRun id """{"line": 10, "arms": 1, "anchor": "let! admitted"}""" (fun tmpDir ->
+        match checkIn tmpDir with
+        | Error message -> test <@ message.Contains "\"reason\"" @>
+        | other -> failwithf "expected a configuration error, got %A" other)

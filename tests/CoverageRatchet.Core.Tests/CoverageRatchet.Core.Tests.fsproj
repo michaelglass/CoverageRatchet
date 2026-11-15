@@ -21,6 +21,7 @@
     <Compile Include="ThresholdsTests.fs" />
     <Compile Include="RatchetTests.fs" />
     <Compile Include="MergeTests.fs" />
+    <Compile Include="ExemptionsTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
