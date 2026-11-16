@@ -10,3 +10,6 @@ TestResults/
 
 # Claude
 .claude/settings.local.json
+
+# jj workspaces: parallel agent and CI workspaces live here, never in the tree
+.workspaces/
