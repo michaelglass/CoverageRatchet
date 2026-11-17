@@ -110,6 +110,16 @@ let ``resolveGitDir - a git_target naming no directory resolves to nothing there
         test <@ resolveGitDir repo = None @>)
 
 [<Fact>]
+let ``resolveGitDir - a store with neither a git directory nor a git_target resolves to nothing there`` () =
+    // A jj repo on a backend other than git (jj's local or test backends) keeps a store with
+    // no `git` directory and no `git_target`: there is no git store to expose.
+    withTempDir (fun tmpDir ->
+        let repo = Path.Combine(tmpDir, "repo")
+        Directory.CreateDirectory(Path.Combine(repo, ".jj", "repo", "store")) |> ignore
+
+        test <@ resolveGitDir repo = None @>)
+
+[<Fact>]
 let ``resolveGitDir - prefers git over jj when both exist`` () =
     withTempDir (fun tmpDir ->
         Directory.CreateDirectory(Path.Combine(tmpDir, ".git")) |> ignore
