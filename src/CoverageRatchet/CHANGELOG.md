@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix: a jj workspace of a git-colocated repository resolves to that repository's `.git`, through its store's `git_target`, instead of walking up to the parent checkout (AUTOMATION-1764; the same fix as FsSemanticTagger's copy of `GitDir.fs`).
+
 - feat: **branch exemptions.** A floor file's `branchExemptions` section names known-unreachable branch points per file: `{ "line", "arms", "anchor", "reason", "platform"? }`. Every command that judges or writes a floor (`check`, `check-json`, `ratchet`, `loosen`, `baseline-lines`, `targets`) reads each file's branches with its exempted uncovered arms out of the denominator, so a floor can stay at "all reachable branches covered" instead of a percentage that equals the worst case. A stale exemption (its line no longer holds its anchor, has no branch point, or has fewer arms than it exempts) stops the command with exit 1 and one line naming it; exemptions on a file whose source cannot be read here stop it with exit 2, never pass. A malformed entry is a configuration error. `gaps` lists every branch point, exempted or not, and no command writes the section: the floor writer leaves it byte for byte.
 
 ## 0.15.0-alpha.20 - 2026-09-30
